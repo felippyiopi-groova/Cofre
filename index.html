@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-/7QCdrWwbhMtkcvul872nTdLTC149NMaZZm+Ff7V1mQ='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-SN1pfwkDnoa2IJIIO5qT/9A/1MbUx/ydmfc3vr4hpJA='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -3278,6 +3278,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         <p class="help" style="margin-top:10px">Ao exportar, escolha <b>Salvar em Arquivos</b>. Guarde <b>duas cópias</b> em lugares diferentes (ex.: iCloud Drive e Google Drive ou e-mail). Para enviar ao ChatGPT, use o JSON comum, não o criptografado.</p>
         ${att ? '' : '<p class="help">Comprovantes: nenhum anexado ainda. Quando houver, o JSON avisa que eles não vão junto e oferece o ZIP.</p>'}
       </div>
+      <div class="section-title"><span>GitHub</span></div>
+      <div class="card">${S.meta.github && S.meta.github.token
+        ? `<div class="small muted" style="margin-bottom:10px;word-break:break-all">${esc(S.meta.github.owner + '/' + S.meta.github.repo)} · último envio: ${S.meta.github.last_push_at ? fdatetime(S.meta.github.last_push_at) : 'nenhum'}</div>
+           <button class="btn" data-act="gh-push">${ic('up')} Enviar backup ao GitHub</button>
+           <button class="btn secondary" data-act="page" data-tab="mais" data-page="github">Baixar do GitHub / configurações</button>`
+        : `<button class="btn secondary" data-act="page" data-tab="mais" data-page="github">${ic('db')} Conectar ao GitHub</button>
+           <p class="help" style="margin-top:10px">Guarda o backup num repositório privado seu, com histórico de versões e criptografia opcional.</p>`}</div>
       <div class="section-title"><span>Importar</span></div>
       <div class="card">
         <button class="btn" data-act="import">${ic('up')} Importar backup do ChatGPT</button>
@@ -3371,9 +3378,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       </div>
       <div class="card"><div class="lbl">Esconder valores</div><p class="small">Embaça os valores na tela (útil em público). Toque no olho na tela Início.</p><button class="btn secondary" data-act="toggle-hide">${S.meta.hide_values ? 'Mostrar valores' : 'Esconder valores'}</button></div>
       <div class="card"><div class="lbl">Privacidade</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
-        <li>Nenhum dado financeiro é enviado para servidor, ChatGPT ou terceiros. Só sai do aparelho quando <b>você</b> exporta.</li>
+        <li>Nenhum dado financeiro é enviado para servidor, ChatGPT ou terceiros. Só sai do aparelho quando <b>você</b> exporta ou toca em <b>Enviar backup ao GitHub</b> (se configurou o GitHub).</li>
         <li>Sem telemetria, sem anúncios, sem rastreamento.</li>
-        <li>A internet só é usada para baixar o próprio app na primeira vez (e atualizações).</li>
+        <li>A internet só é usada para baixar o próprio app (e atualizações) e, se você configurar, para falar com <b>api.github.com</b> quando você pede envio ou download do backup.</li>
         <li>Backup criptografado usa AES-GCM 256 com senha (PBKDF2, 600 mil iterações). Senha perdida = backup irrecuperável.</li></ul></div>
       <div class="card"><div class="lbl" style="color:var(--danger)">Zona de perigo</div><p class="small">Apaga todos os dados, cópias automáticas e comprovantes deste aparelho. Exporte um backup antes.</p><button class="btn danger" data-act="wipe">${ic('trash')} Apagar tudo deste aparelho</button></div>`;
   }
@@ -3459,8 +3466,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   async function startImport() {
     const file = await pickFile();
     if (!file) return;
+    let buf;
+    try { buf = new Uint8Array(await file.arrayBuffer()); }
+    catch (e) { showError('Não foi possível ler o arquivo', esc('Erro inesperado: ' + (e && e.message))); return; }
+    await importFromBytes(buf, file);
+  }
+  /* Lê um backup (JSON, ZIP ou criptografado) e abre a prévia. `file` só precisa ter `name`. */
+  async function importFromBytes(buf, file) {
     try {
-      const buf = new Uint8Array(await file.arrayBuffer());
       let text, zipFiles = [];
       if (Zip.isZip(buf)) {
         const entries = await Zip.readZip(buf);
@@ -3694,6 +3707,171 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!srcDs) { await saveMeta({ last_export_at: nowIso(), last_export_name: name, dirty: false, export_base: C.makeBase(ds), base_source: 'exportação' }); render(); }
       toast(srcDs ? 'Cópia exportada' : 'Backup exportado. Guarde em dois lugares.');
     });
+  }
+
+  // ---------- BACKUP NO GITHUB ----------
+  /* Envia/baixa o backup JSON para um arquivo num repositório do GitHub (API "contents").
+     Cada envio vira um commit, então o GitHub guarda o histórico de todas as versões.
+     O token fica só em S.meta (IndexedDB deste aparelho) e nunca entra no backup exportado. */
+  const GH_API = 'https://api.github.com';
+  const GH_DEFAULT_PATH = 'cofre-backup.json';
+  const ghErr = msg => Object.assign(new Error(msg), { friendly: true });
+  function ghParseRepo(v) {
+    const m = String(v || '').trim().replace(/\.git$/i, '').replace(/\/+$/, '').match(/^(?:https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/);
+    return m ? { owner: m[1], repo: m[2] } : null;
+  }
+  function ghCleanPath(v) {
+    const p = String(v || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/{2,}/g, '/');
+    return p || GH_DEFAULT_PATH;
+  }
+  function ghContentsPath(cfg) {
+    return `/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/` + cfg.path.split('/').map(encodeURIComponent).join('/');
+  }
+  function ghErrorText(status, msg) {
+    if (status === 401) return 'O GitHub recusou o token (inválido, expirado ou revogado). Gere um novo token e salve de novo.';
+    if (status === 403) return /rate limit/i.test(msg) ? 'Limite de uso da API do GitHub atingido. Espere alguns minutos e tente de novo.' : 'O token não tem permissão para isso. Ele precisa de acesso a este repositório com <b>Contents: Read and write</b>.';
+    if (status === 404) return 'Não encontrado. Confira o nome do repositório e o branch. O GitHub também responde assim quando o token <b>não tem acesso</b> ao repositório.';
+    if (status === 409) return 'O arquivo mudou no GitHub durante o envio. Tente de novo.';
+    if (status === 422) return 'O GitHub recusou o envio' + (msg ? ': ' + esc(msg) : '') + '. Confira o branch e o caminho do arquivo.';
+    return 'Erro do GitHub (' + status + ')' + (msg ? ': ' + esc(msg) : '') + '.';
+  }
+  async function ghFetch(cfg, path, opts) {
+    opts = opts || {};
+    const headers = { Authorization: 'Bearer ' + cfg.token, Accept: opts.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    let r;
+    try { r = await fetch(GH_API + path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined, cache: 'no-store', credentials: 'omit' }); }
+    catch (e) { throw ghErr('Sem conexão com o GitHub. Verifique a internet e tente de novo.'); }
+    if (r.ok) return r;
+    if (opts.allow404 && r.status === 404) return null;
+    let msg = ''; try { msg = (await r.json()).message || ''; } catch (e) { /* sem corpo */ }
+    throw Object.assign(ghErr(ghErrorText(r.status, msg)), { status: r.status });
+  }
+  async function ghRepoInfo(cfg) {
+    const r = await ghFetch(cfg, `/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`);
+    return r.json();
+  }
+  async function ghCurrentFile(cfg) {
+    const r = await ghFetch(cfg, ghContentsPath(cfg) + (cfg.branch ? '?ref=' + encodeURIComponent(cfg.branch) : ''), { allow404: true });
+    if (!r) return null;
+    const j = await r.json();
+    if (Array.isArray(j) || j.type !== 'file') throw ghErr('O caminho <b>' + esc(cfg.path) + '</b> é uma pasta no repositório. Informe o nome de um arquivo, ex.: <b>backups/cofre.json</b>.');
+    return j;
+  }
+  function ghLabel(cfg) { return `${cfg.owner}/${cfg.repo}/${cfg.path}${cfg.branch ? ' (' + cfg.branch + ')' : ''}`; }
+  async function ghRun(label, fn) {
+    if (S.ghBusy) { toast('Aguarde: já há uma operação com o GitHub em andamento.'); return; }
+    S.ghBusy = true;
+    toast(label + '…', null, null, 60000);
+    try { await fn(); }
+    catch (e) { document.querySelectorAll('.toast').forEach(t => t.remove()); showError('GitHub', e && e.friendly ? e.message : esc('Erro inesperado: ' + (e && e.message))); }
+    finally { S.ghBusy = false; }
+  }
+
+  function ghSaveConfig() {
+    return ghRun('Testando conexão', async () => {
+      const val = id => (document.getElementById(id) || {}).value || '';
+      const rp = ghParseRepo(val('gh-repo'));
+      if (!rp) throw ghErr('Repositório inválido. Use o formato <b>usuario/repositorio</b> (ex.: <b>felippy/cofre-backup</b>).');
+      const old = S.meta.github || {};
+      const token = val('gh-token').trim() || old.token || '';
+      if (!token) throw ghErr('Cole o token de acesso do GitHub.');
+      const encEl = document.getElementById('gh-enc');
+      const cfg = { owner: rp.owner, repo: rp.repo, branch: val('gh-branch').trim(), path: ghCleanPath(val('gh-path')), token, encrypt: encEl ? encEl.checked : true };
+      const info = await ghRepoInfo(cfg);
+      if (!info.private && !cfg.encrypt) throw ghErr('Este repositório é <b>público</b>: qualquer pessoa na internet veria seus dados financeiros. Use um repositório <b>privado</b> ou ative a criptografia com senha.');
+      const cur = await ghCurrentFile(cfg);
+      await saveMeta({ github: Object.assign({}, old, cfg, { repo_private: !!info.private, default_branch: info.default_branch || null, connected_at: old.connected_at || nowIso() }) });
+      render();
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      openSheet({
+        title: 'GitHub conectado',
+        body: `<div class="notice ok">${ic('check')}<div class="ntext">Acesso ao repositório <b>${esc(cfg.owner + '/' + cfg.repo)}</b> confirmado (${info.private ? 'privado' : '<b>público</b>'}).</div></div>
+          <p class="small">${cur ? `Já existe um backup em <b>${esc(cfg.path)}</b>. Você pode baixá-lo e importar, ou enviar um novo (o anterior continua no histórico do GitHub).` : `Ainda não há arquivo em <b>${esc(cfg.path)}</b>. Ele será criado no primeiro envio.`}</p>
+          ${!info.private ? `<div class="notice warn">${ic('alert')}<div class="ntext">Repositório público: só backups <b>criptografados</b> serão enviados. Mesmo assim, prefira um privado.</div></div>` : ''}`,
+        footHtml: '<button class="btn secondary" data-close>Fechar</button>'
+      });
+    });
+  }
+  async function ghDisconnect() {
+    if (!(await confirmDialog({ title: 'Desconectar o GitHub?', text: 'O token será apagado deste aparelho. Os backups que já estão no GitHub <b>continuam lá</b>. Para invalidar o token de vez, revogue-o também em github.com → Settings → Developer settings.', ok: 'Desconectar', danger: true }))) return;
+    const m = Object.assign({}, S.meta); delete m.github; S.meta = m; await DB.set('meta', m); render(); toast('GitHub desconectado');
+  }
+  function ghPush() {
+    const cfg = S.meta.github;
+    if (!cfg || !cfg.token) { go('mais', 'github'); return; }
+    return ghRun('Enviando backup ao GitHub', async () => {
+      const ds = S.ds;
+      const info = await ghRepoInfo(cfg);
+      if (!info.private && !cfg.encrypt) throw ghErr('O repositório <b>' + esc(cfg.owner + '/' + cfg.repo) + '</b> está <b>público</b>. Envio sem criptografia bloqueado para não expor seus dados.');
+      const exportedAt = nowIso();
+      let text = JSON.stringify(await C.buildExport(ds, exportedAt, { base: S.meta.export_base, previousExportAt: S.meta.last_export_at || S.meta.last_import_file_exported_at }), null, 2);
+      if (cfg.encrypt) {
+        document.querySelectorAll('.toast').forEach(t => t.remove());
+        const pw = await promptPassword({ title: 'Senha do backup', confirm: true, text: 'O arquivo no GitHub será criptografado com esta senha. <b>Sem ela, ninguém (nem você) consegue abrir o backup.</b> Use sempre a mesma e anote num lugar seguro.' });
+        if (!pw) { toast('Envio cancelado. Nada foi enviado.'); return; }
+        toast('Criptografando…', null, null, 60000);
+        text = await C.encryptText(text, pw);
+      }
+      toast('Enviando ao GitHub…', null, null, 60000);
+      const cur = await ghCurrentFile(cfg);
+      const body = { message: `Backup Cofre ${stamp().replace('_', ' ')}${cfg.encrypt ? ' (criptografado)' : ''}`, content: C.b64.enc(new TextEncoder().encode(text)) };
+      if (cur) body.sha = cur.sha;
+      if (cfg.branch) body.branch = cfg.branch;
+      const res = await (await ghFetch(cfg, ghContentsPath(cfg), { method: 'PUT', body })).json();
+      const commitUrl = res && res.commit && res.commit.html_url;
+      await saveMeta({
+        last_export_at: exportedAt, last_export_name: 'GitHub: ' + ghLabel(cfg), dirty: false, export_base: C.makeBase(ds), base_source: 'envio ao GitHub',
+        github: Object.assign({}, cfg, { last_push_at: exportedAt, last_push_commit: commitUrl || null, last_push_encrypted: !!cfg.encrypt })
+      });
+      render();
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      toast('Backup enviado ao GitHub');
+    });
+  }
+  function ghPull() {
+    const cfg = S.meta.github;
+    if (!cfg || !cfg.token) { go('mais', 'github'); return; }
+    return ghRun('Baixando backup do GitHub', async () => {
+      const r = await ghFetch(cfg, ghContentsPath(cfg) + (cfg.branch ? '?ref=' + encodeURIComponent(cfg.branch) : ''), { accept: 'application/vnd.github.raw+json', allow404: true });
+      if (!r) throw ghErr('Ainda não há backup em <b>' + esc(ghLabel(cfg)) + '</b>. Envie um primeiro.');
+      const buf = new Uint8Array(await r.arrayBuffer());
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      await importFromBytes(buf, { name: 'GitHub ' + ghLabel(cfg), size: buf.length });
+    });
+  }
+  function pageGithub() {
+    const g = S.meta.github || {};
+    const on = !!g.token;
+    const repoUrl = on ? `https://github.com/${encodeURIComponent(g.owner)}/${encodeURIComponent(g.repo)}` : '';
+    let h = `<button class="back" data-act="page" data-tab="mais" data-page="backup">${ic('left')}Backup</button><h1 class="page-title">Backup no GitHub</h1>
+      <p class="small muted">Envia o backup para um arquivo num repositório <b>seu</b> no GitHub. Cada envio vira uma versão no histórico do repositório, então dá para recuperar qualquer backup antigo.</p>`;
+    if (on) h += `<div class="card"><div class="lbl">Conectado</div>
+        <div style="font-weight:700;word-break:break-all">${esc(g.owner + '/' + g.repo)}</div>
+        <div class="small muted" style="word-break:break-all">${esc(g.path)}${g.branch ? ' · branch ' + esc(g.branch) : ''} · ${g.repo_private === false ? '<b style="color:var(--warn)">público</b>' : 'privado'} · ${g.encrypt ? 'criptografado com senha' : 'sem criptografia'}</div>
+        <div class="small" style="margin-top:8px">Último envio: <b>${g.last_push_at ? fdatetime(g.last_push_at) : 'nenhum'}</b></div>
+        ${S.meta.dirty ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">Há alterações que ainda não foram para nenhum backup.</div></div>` : ''}
+        <button class="btn" data-act="gh-push" style="margin-top:12px">${ic('up')} Enviar backup agora</button>
+        <button class="btn secondary" data-act="gh-pull">${ic('down')} Baixar do GitHub e importar</button>
+        <p class="help" style="margin-top:10px">Baixar passa pela mesma prévia da importação: você vê o que muda e confirma antes de gravar.${repoUrl ? ` Repositório: <span style="word-break:break-all">${esc(repoUrl)}</span>` : ''}</p></div>`;
+    h += `<div class="section-title"><span>${on ? 'Alterar configuração' : 'Configurar'}</span></div>
+      <div class="card">
+        <div class="field"><label for="gh-repo">Repositório</label><input class="input" id="gh-repo" placeholder="usuario/cofre-backup" autocomplete="off" autocapitalize="none" spellcheck="false" value="${on ? esc(g.owner + '/' + g.repo) : ''}"></div>
+        <div class="field"><label for="gh-path">Arquivo no repositório</label><input class="input" id="gh-path" placeholder="${GH_DEFAULT_PATH}" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(g.path || GH_DEFAULT_PATH)}"></div>
+        <div class="field"><label for="gh-branch">Branch (opcional)</label><input class="input" id="gh-branch" placeholder="${esc(g.default_branch || 'padrão do repositório')}" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(g.branch || '')}"></div>
+        <div class="field"><label for="gh-token">Token de acesso</label><input class="input" id="gh-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${on ? '•••••••• salvo (deixe vazio para manter)' : 'github_pat_…'}"></div>
+        <label class="check"><input type="checkbox" id="gh-enc" ${g.encrypt === false ? '' : 'checked'}><div><b>Criptografar com senha</b><div class="small muted">Recomendado. O GitHub (e quem tiver acesso ao repositório) só vê dados embaralhados. A senha é pedida a cada envio e nunca é guardada.</div></div></label>
+        <button class="btn" data-act="gh-save">${ic('check')} Salvar e testar conexão</button>
+        ${on ? `<button class="btn ghost" data-act="gh-disconnect" style="color:var(--danger)">Desconectar e apagar token</button>` : ''}
+      </div>
+      <details class="card fold"${on ? '' : ' open'}><summary>Como criar o repositório e o token</summary><ol class="small" style="padding-left:18px;margin:10px 0 0;display:grid;gap:8px">
+        <li>No GitHub, crie um repositório <b>privado</b> (ex.: <b>cofre-backup</b>). Não use o repositório onde o app está publicado.</li>
+        <li>Vá em <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+        <li>Em <b>Repository access</b>, escolha <b>Only select repositories</b> e marque só o repositório de backup.</li>
+        <li>Em <b>Permissions → Repository permissions</b>, coloque <b>Contents: Read and write</b>. Nada mais.</li>
+        <li>Defina uma validade (ex.: 1 ano), gere e cole o token aqui.</li></ol></details>
+      <div class="notice info">${ic('info')}<div class="ntext"><b>O que você precisa saber:</b> o token fica guardado <b>sem criptografia</b> neste aparelho (como o resto dos dados do app) e nunca vai dentro dos backups. Por isso ele deve dar acesso <b>só</b> ao repositório de backup. Comprovantes (imagens) não vão para o GitHub, só a lista deles: para eles, use o ZIP completo.</div></div>`;
+    return h;
   }
 
   // ---------- restauração e integridade ----------
@@ -4040,13 +4218,17 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- eventos ----------
   const TABS = { inicio: viewInicio, extrato: viewExtrato, pergunte: viewPergunte, contas: viewContas, mais: viewMais };
   const PAGES = { backup: pageBackup, planejamento: pagePlanejamento, conciliacao: pageConciliacao, auditoria: pageAuditoria, dados: pageDados, seguranca: pageSeguranca, sobre: pageSobre,
-    docs: pageDocs, relatorios: pageRelatorios, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
+    docs: pageDocs, relatorios: pageRelatorios, github: pageGithub, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
   const ACTIONS = {
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
     import: () => startImport(),
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
+    'gh-save': () => ghSaveConfig(),
+    'gh-push': () => ghPush(),
+    'gh-pull': () => ghPull(),
+    'gh-disconnect': () => ghDisconnect(),
     'tx-new': () => openTxForm(null),
     'tx-edit': el => openTxDetail(el.dataset.id),
     card: el => openCard(el.dataset.id),
