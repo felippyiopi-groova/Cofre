@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-nFjzjUyh5yuM51joaVEyHTvyF2iZgh/UIw4uccBlzXw='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-WXnvu71zYvZhTi5UYnR5COp9Et/gCfw8O/YmA7XXlyI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -403,19 +403,33 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
   // ---------- moeda principal e câmbio ----------
   // ds.settings.main_currency: moeda em que os totais são mostrados (padrão BRL).
-  // ds.settings.exchange_rates[MOEDA] = { rate, updated_at }: 1 MOEDA = rate unidades da moeda principal.
-  // A cotação é digitada pela pessoa (o app não busca na internet).
+  // Cotação de cada moeda (1 MOEDA = rate na moeda principal), nesta ordem de prioridade:
+  //   1) fixada pela pessoa: ds.settings.exchange_rates[MOEDA] = { rate, fixed: true }
+  //   2) automática: tabela do dia baixada pelo app (fica neste aparelho, fora dos dados)
+  //   3) digitada antes da cotação automática existir (sem "fixed"): só se não houver automática
+  const AUTO = { main: null, date: null, rates: {} };
+  // perMain = { usd: 0.182, ... } (quanto de cada moeda vale 1 unidade da principal), como vem da tabela.
+  function setAutoRates(main, date, perMain) {
+    AUTO.main = main ? String(main).toUpperCase() : null; AUTO.date = date || null; AUTO.rates = {};
+    for (const [k, v] of Object.entries(perMain || {})) { const n = Number(v); if (n > 0 && isFinite(n)) AUTO.rates[k.toUpperCase()] = 1 / n; }
+  }
+  function rateInfo(ds, cur) {
+    cur = String(cur || '').toUpperCase();
+    const main = mainCurrency(ds);
+    if (!cur || cur === main) return { rate: 1, source: 'principal' };
+    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
+    const r = rates[cur], manual = num(isObj(r) ? r.rate : r);
+    if (manual > 0 && isObj(r) && r.fixed) return { rate: manual, source: 'fixada', date: r.updated_at || null };
+    if (AUTO.main === main && AUTO.rates[cur] > 0) return { rate: AUTO.rates[cur], source: 'automatica', date: AUTO.date };
+    if (manual > 0) return { rate: manual, source: 'digitada', date: isObj(r) ? r.updated_at || null : null };
+    return { rate: null, source: null };
+  }
+  function autoRatesState() { return { main: AUTO.main, date: AUTO.date, count: Object.keys(AUTO.rates).length }; }
   function mainCurrency(ds) {
     const st = ds && isObj(ds.settings) ? ds.settings : {};
     return String(st.main_currency || (ds && ds.currency_default) || 'BRL').toUpperCase();
   }
-  function rateOf(ds, cur) {
-    cur = String(cur || '').toUpperCase();
-    if (!cur || cur === mainCurrency(ds)) return 1;
-    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
-    const r = rates[cur]; const n = num(isObj(r) ? r.rate : r);
-    return n > 0 ? n : null;
-  }
+  function rateOf(ds, cur) { return rateInfo(ds, cur).rate; }
   // Valor convertido para a moeda principal, ou null se falta cotação.
   function toMain(amount, cur, ds) {
     const r = rateOf(ds, cur);
@@ -934,7 +948,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'Novos lançamentos vão em "transactions", cada um com "id" novo e único (ex.: tx-2026-10-26-uber-ida), "date" AAAA-MM-DD, "type" (despesa | receita | transferencia | pagamento_fatura | emprestimo | provisao | ajuste), "status" (confirmado | pendente | planejado | estimado | cancelado), "account_id" (de accounts ou credit_facilities), "amount" positivo, "currency", "category", "description", "origin" (usuario | recibo | calculo), "created_at" e "updated_at".',
     'Use status "confirmado" somente para o que o usuário confirmou que aconteceu. Compras planejadas continuam "planejado".',
     'Contas em "accounts": "id", "name", "institution" (banco), "currency" (código ISO de 3 letras, ex.: BRL, USD, EUR), "snapshot_balance", "snapshot_date" e "status" ("operacional" ou "reserva"; reserva não entra no disponível).',
-    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações digitadas pelo usuário (1 MOEDA = "rate" na moeda principal). Não altere sem pedido explícito e não invente cotações.',
+    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações FIXADAS pelo usuário (1 MOEDA = "rate" na moeda principal, com "fixed": true). As demais o app busca sozinho todo dia. Não altere sem pedido explícito e não invente cotações.',
     'Não altere "snapshot_balance" nem "snapshot_date" sem pedido explícito. O app calcula: saldo = snapshot + lançamentos confirmados com data posterior ao corte.',
     'Lançamento na MESMA data do corte só entra no saldo se tiver "after_snapshot": true.',
     'Compra no cartão de crédito: type "despesa" com "account_id" = id do cartão em credit_facilities (aumenta a fatura, não desconta conta bancária). Pagamento da fatura: type "pagamento_fatura", "account_id" = conta que pagou, "to_account_id" = cartão (não é nova despesa).',
@@ -1025,7 +1039,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
-    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, toMain, currencyOf, txCurrency, isObligationOpen,
+    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
     prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
@@ -2861,6 +2875,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     S.ds = newDs; S.meta = meta;
     render();
     if (syReady()) syLater();
+    if (C.summarize(newDs).missingRates.length) fxRefresh(true);
     // No modo "só ver" o aviso tem prioridade: a alteração NÃO vai para o cofre compartilhado.
     if (syReady() && SY.state.role === 'viewer') toast('Você está no modo "só ver": esta alteração fica só neste aparelho e não vai para o cofre compartilhado', null, null, 6000);
     else if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
@@ -2969,7 +2984,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       </div>` : ''}
       <div class="foot">Saldo informado de cada conta + lançamentos confirmados${sum.currencies.length > 1 ? ', outras moedas convertidas pela cotação que você informou' : ''}. Não inclui crédito, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
     </section>
-    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Falta cotação:</b> ${esc(sum.missingRates.join(', '))} ficam fora do patrimônio total. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>` : ''}
+    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Sem cotação para ${esc(sum.missingRates.join(', '))}</b>: fica fora do patrimônio total até o app conseguir baixar a cotação (precisa de internet) ou você fixar um valor. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Ver cotações</button></div></div>` : ''}
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
       <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
@@ -3774,7 +3789,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       <div class="card"><div class="lbl">Privacidade</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
         <li>Nenhum dado financeiro sai do aparelho sem você pedir: só quando você exporta, envia ao GitHub ou liga a <b>Sincronização</b>. Na sincronização, tudo sai <b>embaralhado</b>: o servidor não consegue ler, nem o dono do app.</li>
         <li>Sem telemetria, sem anúncios, sem rastreamento.</li>
-        <li>A internet só é usada para baixar o app (e atualizações) e, se você ativar, para o backup no GitHub e para a sincronização (servidor Supabase).</li>
+        <li>A internet só é usada para baixar o app (e atualizações), a <b>tabela pública de cotações</b> (traz todas as moedas; não revela as suas nem valores; dá para desligar em Moedas e câmbio) e, se você ativar, o backup no GitHub e a sincronização (servidor Supabase).</li>
         <li>Backup criptografado usa AES-GCM 256 com senha (PBKDF2, 600 mil iterações). Senha perdida = backup irrecuperável.</li></ul></div>
       <div class="card"><div class="lbl" style="color:var(--danger)">Zona de perigo</div><p class="small">Apaga todos os dados, cópias automáticas e comprovantes deste aparelho. Exporte um backup antes.</p><button class="btn danger" data-act="wipe">${ic('trash')} Apagar tudo deste aparelho</button></div>`;
   }
@@ -4640,50 +4655,106 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     set.delete(C.mainCurrency(ds));
     return Array.from(set).sort();
   }
+  // ---------- cotação automática ----------
+  // Tabela pública diária (fawazahmed0/currency-api, publicada no npm e servida pelo jsDelivr; espelho de reserva).
+  // Ela traz TODAS as moedas: o serviço não fica sabendo quais você tem nem quanto. Fica neste aparelho (não sincroniza).
+  const FX_URLS = cur => [`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${cur}.min.json`, `https://latest.currency-api.pages.dev/v1/currencies/${cur}.min.json`];
+  const FX_MAX_AGE = 6 * 3600e3;
+  let fxBusy = null;
+  const fxOn = ds => !(ds && ds.settings && ds.settings.auto_rates === false);
+  async function fxLoadCache() {
+    try { const c = await DB.get('fx_cache'); if (c && c.data) C.setAutoRates(c.main, c.date, c.data); return c || null; } catch (e) { return null; }
+  }
+  // force: ignora o intervalo de 6 h. Devolve true se a tabela mudou.
+  function fxRefresh(force) {
+    if (fxBusy) return fxBusy;
+    fxBusy = (async () => {
+      if (!S.ds || !fxOn(S.ds)) return false;
+      const main = C.mainCurrency(S.ds), cur = main.toLowerCase();
+      let cache = null; try { cache = await DB.get('fx_cache'); } catch (e) { cache = null; }
+      if (!force && cache && cache.main === main && Date.now() - cache.fetched_at < FX_MAX_AGE) return false;
+      let lastErr = null;
+      for (const url of FX_URLS(cur)) {
+        try {
+          const r = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const j = await r.json();
+          const data = j && j[cur];
+          if (!j || typeof j.date !== 'string' || !data || typeof data !== 'object' || !(Object.values(data).filter(v => v > 0).length > 20)) throw new Error('tabela inválida');
+          const novo = { main, date: j.date, data, fetched_at: Date.now(), source: url.includes('jsdelivr') ? 'jsDelivr' : 'espelho' };
+          await DB.set('fx_cache', novo);
+          C.setAutoRates(main, j.date, data);
+          S.fxError = null;
+          return !cache || cache.date !== j.date || cache.main !== main;
+        } catch (e) { lastErr = e; }
+      }
+      S.fxError = navigator.onLine === false || (lastErr && lastErr.name === 'TypeError') ? 'sem conexão com o serviço de cotação' : 'o serviço de cotação respondeu com erro';
+      return false;
+    })().then(changed => { if (changed || S.page === 'moedas') render(); return changed; }).finally(() => { fxBusy = null; });
+    return fxBusy;
+  }
+  function fmtRate(v, cur) {
+    const d = v >= 100 ? 2 : v >= 1 ? 4 : 6;
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: cur, minimumFractionDigits: 2, maximumFractionDigits: d }).format(v).replace(/\s/g, ' ');
+  }
   function pageMoedas() {
-    const ds = S.ds, MC = C.mainCurrency(ds), rates = (ds.settings && ds.settings.exchange_rates) || {};
-    const used = currenciesInUse(ds);
+    const ds = S.ds, MC = C.mainCurrency(ds), used = currenciesInUse(ds), auto = C.autoRatesState(), on = fxOn(ds);
     let h = backBar('Mais', 'mais') + `<h1 class="page-title">Moedas e câmbio</h1>
       <div class="card"><div class="lbl">Moeda principal</div>
         <div style="font-size:20px;font-weight:700;margin:2px 0 4px">${esc(MC)} · ${esc(curName(MC))}</div>
         <p class="small muted" style="margin:0 0 10px">O patrimônio total e os resumos aparecem nesta moeda. Contas em outras moedas são convertidas pela cotação abaixo.</p>
         <button class="btn secondary" data-act="cur-main">Trocar moeda principal</button></div>
-      <div class="section-title"><span>Cotações</span></div>`;
-    if (!used.length) h += `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
-    else {
-      h += `<div class="card">` + used.map(c => {
-        const r = rates[c]; const v = C.num(r && typeof r === 'object' ? r.rate : r);
-        return `<div class="field"><label for="rate-${c}">1 ${esc(c)} (${esc(curName(c))}) vale quantos ${esc(MC)}?</label>
-          <input class="input num" id="rate-${c}" data-rate="${c}" inputmode="decimal" placeholder="ex.: 6,20" value="${v > 0 ? esc(String(v).replace('.', ',')) : ''}">
-          <p class="help">${v > 0 ? 'Atualizada em ' + (r && r.updated_at ? fdatetime(r.updated_at) : 'data desconhecida') : '<b style="color:var(--warn)">Sem cotação:</b> esta moeda fica fora do patrimônio total.'}</p></div>`;
-      }).join('') + `<button class="btn" data-act="rates-save">${ic('check')} Salvar cotações</button>
-        <p class="help" style="margin-top:10px">O app não busca cotação na internet: você digita. Use a do seu banco ou corretora (é a que vale para você). Deixe em branco para tirar a moeda do total.</p></div>`;
-    }
+      <div class="section-title"><span>Cotações</span></div>
+      <div class="card"><label class="check" style="padding-top:0"><input type="checkbox" data-act="fx-toggle" ${on ? 'checked' : ''}><div><b>Atualizar automaticamente</b><div class="small muted">${on ? (auto.main === MC && auto.date ? `Cotações de ${esc(fdate(auto.date))}. O app confere de novo a cada 6 horas.` : 'Ainda não baixou a tabela de cotações.') : 'Desligado: só valem as cotações que você fixar.'}${on && S.fxError ? ` <span style="color:var(--warn)">Última tentativa falhou: ${esc(S.fxError)}${auto.date ? '; usando a tabela anterior' : ''}.</span>` : ''}</div></div></label>
+        ${on ? `<button class="btn secondary" data-act="fx-now">Atualizar agora</button>` : ''}</div>`;
+    if (!used.length) return h + `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
+    h += `<div class="card"><div class="rows">` + used.map(c => {
+      const info = C.rateInfo(ds, c);
+      const tag = info.source === 'fixada' ? '<span class="badge gold">fixada por você</span>' : info.source === 'automatica' ? '<span class="badge">automática</span>' : info.source === 'digitada' ? '<span class="badge">digitada</span>' : '<span class="badge warn">sem cotação</span>';
+      const btn = info.source === 'fixada' ? `<button class="chip" data-act="fx-unfix" data-cur="${c}">Usar automática</button>` : `<button class="chip" data-act="fx-fix" data-cur="${c}">Fixar valor</button>`;
+      return `<div class="row-item" style="flex-wrap:wrap"><div class="ico">${esc(c)}</div><div class="main"><div class="t">${info.rate ? `1 ${esc(c)} = ${esc(fmtRate(info.rate, MC))}` : esc(curName(c))}</div><div class="s">${tag}${info.source === 'fixada' && info.date ? ' desde ' + esc(fdate(info.date)) : ''}${!info.rate ? ' fica fora do patrimônio total' : ''}</div></div>
+        <div style="width:100%;padding-left:52px;margin-top:6px">${btn}</div></div>`;
+    }).join('') + `</div><p class="help" style="margin-top:10px"><b>Fixar valor</b> serve para usar a cotação que o seu banco ou corretora cobrou. A cotação fixada vale até você voltar para a automática.</p></div>
+      <p class="tiny muted">Fonte da cotação automática: tabela pública diária <i>currency-api</i>, baixada pelo jsDelivr. Ela traz todas as moedas de uma vez, então o serviço não sabe quais você tem nem quanto.</p>`;
     return h;
   }
-  async function saveRates() {
-    const ds2 = C.clone(S.ds), now = nowIso();
+  function fixRate(cur) {
+    const MC = C.mainCurrency(S.ds), now = C.rateInfo(S.ds, cur);
+    const sh = openSheet({
+      title: 'Fixar cotação de ' + cur,
+      body: `<div class="field"><label for="fx-val">1 ${esc(cur)} vale quantos ${esc(MC)}?</label><input class="input num" id="fx-val" inputmode="decimal" placeholder="ex.: 5,40" value="${now.rate ? esc(String(C.round2(now.rate * 10000) / 10000).replace('.', ',')) : ''}"></div>
+        <p class="help">Enquanto estiver fixada, a cotação automática não muda este valor.</p><div id="fx-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<button class="btn" data-ok>Fixar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const v = C.num(sh.body.querySelector('#fx-val').value.trim());
+      if (!(v > 0)) { sh.body.querySelector('#fx-err').textContent = 'Use um número maior que zero, ex.: 5,40.'; return; }
+      sh.close();
+      const ds2 = C.clone(S.ds);
+      ds2.settings = Object.assign({}, ds2.settings || {});
+      ds2.settings.exchange_rates = Object.assign({}, ds2.settings.exchange_rates || {}, { [cur]: { rate: v, fixed: true, updated_at: nowIso() } });
+      await commit(ds2, { audit: { type: 'exchange-rates', description: `Cotação fixada: 1 ${cur} = ${String(v).replace('.', ',')} ${MC}` }, toast: 'Cotação fixada' });
+    };
+  }
+  async function unfixRate(cur) {
+    const ds2 = C.clone(S.ds);
     ds2.settings = Object.assign({}, ds2.settings || {});
-    const rates = Object.assign({}, ds2.settings.exchange_rates || {});
-    const changed = [];
-    for (const inp of document.querySelectorAll('[data-rate]')) {
-      const c = inp.dataset.rate, raw = inp.value.trim();
-      const old = rates[c] && typeof rates[c] === 'object' ? C.num(rates[c].rate) : C.num(rates[c]);
-      if (!raw) { if (rates[c] !== undefined) { delete rates[c]; changed.push(c + ' removida'); } continue; }
-      const v = C.num(raw);
-      if (!(v > 0)) { showError('Cotação inválida', `Confira o valor de <b>${esc(c)}</b>. Use número maior que zero, ex.: 6,20.`); return; }
-      if (v !== old) { rates[c] = { rate: v, updated_at: now }; changed.push(`1 ${c} = ${String(v).replace('.', ',')} ${C.mainCurrency(ds2)}`); }
-    }
-    if (!changed.length) { toast('Nenhuma cotação mudou'); return; }
-    ds2.settings.exchange_rates = rates;
-    await commit(ds2, { audit: { type: 'exchange-rates', description: 'Cotações: ' + changed.join('; ') }, toast: 'Cotações salvas' });
+    const r = Object.assign({}, ds2.settings.exchange_rates || {}); delete r[cur]; ds2.settings.exchange_rates = r;
+    await commit(ds2, { audit: { type: 'exchange-rates', description: `Cotação de ${cur} voltou para a automática` }, toast: cur + ': cotação automática' });
+  }
+  async function toggleAutoRates(on) {
+    const ds2 = C.clone(S.ds);
+    ds2.settings = Object.assign({}, ds2.settings || {}, { auto_rates: !!on });
+    if (!on) { try { await DB.set('fx_cache', null); } catch (e) { /* ignora */ } C.setAutoRates(null, null, {}); }
+    await commit(ds2, { audit: { type: 'exchange-rates', description: on ? 'Cotação automática ligada' : 'Cotação automática desligada' }, toast: on ? 'Cotação automática ligada' : 'Cotação automática desligada' });
+    if (on) fxRefresh(true);
   }
   function changeMainCurrency() {
     const MC = C.mainCurrency(S.ds);
     const sh = openSheet({
       title: 'Moeda principal',
       body: `<div class="field"><label for="mc-sel">Mostrar totais em</label><select class="input" id="mc-sel">${currencyOptions(MC)}</select></div>
-        <div class="notice warn">${ic('alert')}<div class="ntext">As cotações são relativas à moeda principal. Ao trocar, <b>todas as cotações são apagadas</b> e você digita de novo. Saldos e lançamentos não mudam.</div></div>`,
+        <div class="notice info">${ic('info')}<div class="ntext">A cotação automática se ajusta sozinha à nova moeda. As cotações que você <b>fixou</b> são apagadas (eram relativas à moeda antiga). Saldos e lançamentos não mudam.</div></div>`,
       footHtml: `<button class="btn" data-ok>Trocar</button>`
     });
     sh.foot.querySelector('[data-ok]').onclick = async () => {
@@ -4692,7 +4763,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (v === MC) return;
       const ds2 = C.clone(S.ds);
       ds2.settings = Object.assign({}, ds2.settings || {}, { main_currency: v, exchange_rates: {} });
-      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações zeradas)` }, toast: 'Moeda principal: ' + v });
+      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações fixadas apagadas)` }, toast: 'Moeda principal: ' + v });
+      fxRefresh(true);
     };
   }
 
@@ -4746,7 +4818,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       sh.close();
       const desc = acc ? `Conta editada: ${a.name}` : `Conta cadastrada: ${a.name} (${a.currency})`;
       await commit(ds2, { audit: { type: acc ? 'account-edit' : 'account-create', description: desc + (bal === null ? '' : ` · saldo ${money(a.snapshot_balance, a.currency)} em ${fdate(date)}`), extra: { record_id: a.id } }, backupReason: acc ? 'Antes de editar a conta ' + acc.name : null, toast: acc ? 'Conta atualizada' : 'Conta cadastrada' });
-      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) toast(`Informe a cotação de ${a.currency} em Mais → Moedas e câmbio`, 'Abrir', () => go('mais', 'moedas'), 6000);
+      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) fxRefresh(true).then(() => { if (C.rateOf(S.ds, a.currency) === null) toast(`Sem cotação de ${a.currency} agora (${S.fxError || 'sem internet?'}). O app tenta de novo sozinho.`, 'Ver', () => go('mais', 'moedas'), 6000); });
     };
     const del = sh.foot.querySelector('[data-del]');
     if (del) del.onclick = async () => {
@@ -5327,7 +5399,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
     'cur-main': () => changeMainCurrency(),
-    'rates-save': () => saveRates(),
+    'fx-now': () => { toast('Buscando cotações…'); fxRefresh(true).then(() => { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(S.fxError ? 'Não foi possível atualizar: ' + S.fxError : 'Cotações atualizadas'); }); },
+    'fx-fix': el => fixRate(el.dataset.cur),
+    'fx-unfix': el => unfixRate(el.dataset.cur),
+    'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
     'gh-push': () => ghPush(),
     'gh-pull': () => ghPull(),
@@ -5385,6 +5460,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (e.target && e.target.id === 'ext-search') { S.ext.text = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { const r = document.getElementById('ext-results'); if (r) r.innerHTML = renderExtResults(); }, 150); }
   });
   document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) fxRefresh(false);
     if (!document.hidden && syReady() && (!SY.state.last_sync_at || Date.now() - Date.parse(SY.state.last_sync_at) > 30000)) syRun(false);
     if (document.hidden) S.hiddenAt = Date.now();
     else if (S.meta.pin && S.ds && S.hiddenAt && Date.now() - S.hiddenAt > AUTOLOCK_MS) { S.locked = true; S.sheets.slice().forEach(s => s.close()); render(); }
@@ -5423,9 +5499,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     }
     if (S.meta.pin && S.ds) S.locked = true;
     await syLoad();
+    await fxLoadCache(); // cotação do último download: funciona sem internet
     await handleLinkHash();
     render();
     if (syReady()) syRun(false);
+    fxRefresh(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
     await storageInfo();
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
