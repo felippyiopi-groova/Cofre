@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-MDixQ03M9IzO/qBgT63vrvqXDsAnE2t0R9GVBS2Q7xU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-zkIDc8WOBxu1rtvEy/P0CrpJGkG78ggb2EbCdBwqXWs='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -2841,7 +2841,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     S.ds = newDs; S.meta = meta;
     render();
     if (syReady()) syLater();
-    if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
+    // No modo "só ver" o aviso tem prioridade: a alteração NÃO vai para o cofre compartilhado.
+    if (syReady() && SY.state.role === 'viewer') toast('Você está no modo "só ver": esta alteração fica só neste aparelho e não vai para o cofre compartilhado', null, null, 6000);
+    else if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
   }
   async function saveMeta(patch) { S.meta = Object.assign({}, S.meta, patch); await DB.set('meta', S.meta); }
 
@@ -4160,6 +4162,51 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
 
   // Login ou cadastro. A senha nunca sai do aparelho: vai só a "prova" derivada dela.
+  // Preferências que sobrevivem a sair/entrar: cofre escolhido e pedido de entrada em andamento, por usuário.
+  async function syPref() { try { return (await DB.get('sync_pref')) || {}; } catch (e) { return {}; } }
+  async function sySetPref(patch) { const p = Object.assign(await syPref(), patch); await DB.set('sync_pref', p); return p; }
+  const hexOf = u8 => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+  async function syInviteToken() {
+    let v = null; try { v = await DB.get('sync_invite'); } catch (e) { v = null; }
+    return v && v.token && Date.now() - v.at < 48 * 3600e3 ? v.token : null;
+  }
+  // Aceita o convite guardado neste aparelho (link aberto). Não dá acesso ainda: o dono precisa aprovar.
+  async function syAcceptInvite() {
+    const tok = await syInviteToken(); if (!tok) return null;
+    const uid = SY.state.user.id;
+    try {
+      const r = (await rest('rpc/accept_invite_v2', { method: 'POST', body: { token: tok } }))[0];
+      if (!r) throw nErr('Convite inválido, já usado ou expirado. Peça um novo link.');
+      const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
+      const code = await Sigilo.safetyCode(me.enc_public_key, r.owner_enc_public_key);
+      SY.state.pending = { vault_id: r.vault_id, role: r.role, owner_email: r.owner_email || 'o dono do cofre', code, since: nowIso() };
+      await sySetPref({ ['pending_' + uid]: SY.state.pending });
+      await sySave();
+      return SY.state.pending;
+    } catch (e) {
+      if (e.status === 400 || /inválido|expirado|já é membro/.test(e.message)) throw nErr(/já é membro/.test(e.message) ? 'Você já faz parte deste cofre.' : 'Convite inválido, já usado ou expirado. Peça um novo link a quem convidou.');
+      throw e;
+    } finally { await DB.set('sync_invite', null); S.syInvited = false; }
+  }
+  async function syActivate(m) {
+    const vk = await Sigilo.vaultKeys(await Sigilo.unlockVaultSecret(m.wrapped_vault_key, SY.keys.encPrivate, m.vault_id));
+    SY.keys = { encPrivate: SY.keys.encPrivate, signPrivate: SY.keys.signPrivate, data: vk.data, rid: vk.rid };
+    const changed = SY.state.vault_id !== m.vault_id;
+    Object.assign(SY.state, { vault_id: m.vault_id, role: m.role, key_version: m.key_version, wrapped_vault_key: m.wrapped_vault_key, connected_at: nowIso() });
+    if (changed) Object.assign(SY.state, { cursor: 0, base: {}, conflicts: [] });
+    delete SY.state.removed;
+    await DB.set('sync_keys', SY.keys); await sySave();
+    await sySetPref({ ['vault_' + SY.state.user.id]: m.vault_id });
+  }
+  async function syCreateOwnVault(uid) {
+    const v = (await rest('vaults', { method: 'POST', body: { owner_id: uid }, headers: { Prefer: 'return=representation' } }))[0];
+    const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
+    const wrapped = await Sigilo.lockForMember(Sigilo.newVaultSecret(), me.enc_public_key, v.id);
+    await rest('vault_members', { method: 'POST', body: { vault_id: v.id, user_id: uid, role: 'owner', wrapped_vault_key: wrapped, key_version: 1, added_by: uid }, headers: { Prefer: 'return=minimal' } });
+    return { vault_id: v.id, role: 'owner', wrapped_vault_key: wrapped, key_version: 1 };
+  }
+
+  // Login ou cadastro. A senha nunca sai do aparelho: vai só a "prova" derivada dela.
   async function syConnect(mode, email, password) {
     await syLoad();
     email = String(email).trim().toLowerCase();
@@ -4180,28 +4227,58 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       const keys = await Sigilo.newUserKeys(), pub = await Sigilo.publicKeys(keys), code = Sigilo.newRecoveryCode();
       if (!(await showRecoveryCode(code))) { await syForget(); throw nErr('Cadastro cancelado antes de anotar a chave de recuperação. Nada foi enviado. Entre de novo para continuar.'); }
       toast('Criando suas chaves…', null, null, 60000);
-      await rest('profiles', { method: 'POST', body: Object.assign({ user_id: uid }, pub), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      await rest('profiles', { method: 'POST', body: Object.assign({ user_id: uid, email }, pub), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
       await rest('user_keys', { method: 'POST', body: { user_id: uid, wrapped_private_keys: await Sigilo.lockPrivate(keys, pw.kek), recovery_wrapped_private_keys: await Sigilo.lockPrivate(keys, await Sigilo.recoveryKek(code)), kdf: pw.kdf }, headers: { Prefer: 'return=minimal' } });
       uk = (await rest('user_keys?select=*'))[0];
-    }
+    } else rest('profiles?user_id=eq.' + uid, { method: 'PATCH', body: { email }, headers: { Prefer: 'return=minimal' } }).catch(() => {});
     const priv = await Sigilo.unlockPrivate(uk.wrapped_private_keys, pw.kek);
+    SY.keys = { encPrivate: priv.encPrivate, signPrivate: priv.signPrivate };
+    await DB.set('sync_keys', SY.keys);
+    // Convite aberto neste aparelho? Aceita (fica aguardando a aprovação do dono).
+    let pend = null, inviteError = null;
+    try { pend = await syAcceptInvite(); } catch (e) { if (e.offline) throw e; inviteError = e.message; } // convite ruim não impede o login
+    pend = pend || (await syPref())['pending_' + uid] || null;
+    if (pend) SY.state.pending = pend;
     let mem = await rest('vault_members?select=vault_id,role,wrapped_vault_key,key_version&user_id=eq.' + uid);
+    if (SY.state.pending && mem.some(x => x.vault_id === SY.state.pending.vault_id)) { delete SY.state.pending; await sySetPref({ ['pending_' + uid]: null }); }
     let created = false;
     if (!mem.length) {
-      const v = (await rest('vaults', { method: 'POST', body: { owner_id: uid }, headers: { Prefer: 'return=representation' } }))[0];
-      const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
-      const wrapped = await Sigilo.lockForMember(Sigilo.newVaultSecret(), me.enc_public_key, v.id);
-      await rest('vault_members', { method: 'POST', body: { vault_id: v.id, user_id: uid, role: 'owner', wrapped_vault_key: wrapped, key_version: 1, added_by: uid }, headers: { Prefer: 'return=minimal' } });
-      mem = [{ vault_id: v.id, role: 'owner', wrapped_vault_key: wrapped, key_version: 1 }]; created = true;
+      if (SY.state.pending) { await sySave(); document.querySelectorAll('.toast').forEach(t => t.remove()); return { pending: true }; } // entrando num cofre de outra pessoa: não cria um próprio
+      mem = [await syCreateOwnVault(uid)]; created = true;
     }
-    const m = mem.find(x => x.role === 'owner') || mem[0];
-    const vk = await Sigilo.vaultKeys(await Sigilo.unlockVaultSecret(m.wrapped_vault_key, priv.encPrivate, m.vault_id));
-    SY.keys = { encPrivate: priv.encPrivate, signPrivate: priv.signPrivate, data: vk.data, rid: vk.rid };
-    Object.assign(SY.state, { vault_id: m.vault_id, role: m.role, key_version: m.key_version, wrapped_vault_key: m.wrapped_vault_key, connected_at: nowIso() });
-    await DB.set('sync_keys', SY.keys); await sySave();
+    const want = (await syPref())['vault_' + uid];
+    const m = mem.find(x => x.vault_id === want) || mem.find(x => x.role === 'owner') || mem[0];
+    await syActivate(m);
     document.querySelectorAll('.toast').forEach(t => t.remove());
-    return { created };
+    return { created, pending: !!SY.state.pending, inviteError };
   }
+
+  // Quem pediu para entrar: confere se o dono já aprovou e, se sim, troca para o cofre compartilhado.
+  async function syCheckPending(manual, fromRun) {
+    await syLoad(); const st = SY.state;
+    if (!st || !st.pending || !st.session || !SY.keys) return false;
+    const mem = await rest(`vault_members?select=vault_id,role,wrapped_vault_key,key_version&vault_id=eq.${st.pending.vault_id}&user_id=eq.${st.user.id}`);
+    if (!mem.length) { if (manual) toast('Ainda aguardando a aprovação de ' + st.pending.owner_email); return false; }
+    const owner = st.pending.owner_email;
+    if (S.ds && Object.keys(S.ds).length) {
+      const juntar = await confirmDialog({ title: 'Acesso aprovado', text: `Você entrou no cofre de <b>${esc(owner)}</b>, mas este aparelho já tem dados.<br><br><b>Usar só os do cofre</b> (recomendado): os dados deste aparelho são trocados pelos do cofre; os atuais ficam numa cópia automática.<br><br><b>Juntar</b>: seus dados atuais são enviados para o cofre compartilhado e todos os membros passam a vê-los.`, ok: 'Juntar', cancel: 'Usar só os do cofre' });
+      if (!juntar) { await DB.saveWithBackup(makeBackup(S.ds, 'Antes de entrar no cofre de ' + owner), null, S.meta); S.ds = null; }
+    }
+    await syActivate(mem[0]);
+    delete st.pending; await sySetPref({ ['pending_' + st.user.id]: null }); await sySave();
+    toast('Acesso aprovado: agora vocês compartilham o mesmo cofre');
+    render();
+    if (!fromRun) await syRun(manual); // dentro de syRun a sincronização continua sozinha (evita esperar por si mesma)
+    return true;
+  }
+  // Volta para um cofre só seu (depois de sair ou ser removido de um compartilhado).
+  async function syUseOwn() {
+    await syLoad(); const uid = SY.state.user.id;
+    const mem = await rest('vault_members?select=vault_id,role,wrapped_vault_key,key_version&user_id=eq.' + uid + '&role=eq.owner');
+    await syActivate(mem[0] || await syCreateOwnVault(uid));
+    toast('Sincronizando com um cofre só seu'); render(); await syRun(true);
+  }
+
 
   // Baixa, junta e envia. Sem conexão: tenta de novo depois, sem perder nada.
   let syRunning = null, syTimer = null;
@@ -4210,10 +4287,23 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (syRunning) return syRunning;
     syRunning = (async () => {
       await syLoad();
+      if (SY.state && SY.state.pending && SY.state.session && SY.keys) { try { await syCheckPending(manual, true); } catch (e) { /* tenta depois */ } }
       if (!syReady()) { if (manual) go('mais', 'sync'); return; }
       const st = SY.state, V = st.vault_id, kv = st.key_version || 1;
       if (manual) toast('Sincronizando…', null, null, 60000);
       try {
+        const eu = await rest(`vault_members?select=role&vault_id=eq.${V}&user_id=eq.${st.user.id}`);
+        if (!eu.length) { // o dono removeu este acesso: para de sincronizar, sem apagar nada daqui
+          st.removed = { vault_id: V, at: nowIso() }; st.vault_id = null; await sySave();
+          document.querySelectorAll('.toast').forEach(t => t.remove());
+          toast('Seu acesso ao cofre compartilhado foi removido'); render(); return;
+        }
+        st.role = eu[0].role;
+        if (st.role === 'owner') {
+          const reqs = await rest(`vault_invites?select=id&vault_id=eq.${V}&status=eq.accepted`);
+          if (reqs.length && reqs.length !== st.requests) toast(`${reqs.length} pessoa(s) pedindo para entrar no cofre`, 'Ver', () => go('mais', 'sync'), 6000);
+          st.requests = reqs.length;
+        }
         const signOf = {};
         (await rest('profiles?select=user_id,sign_public_key')).forEach(p => { signOf[p.user_id] = p.sign_public_key; });
         // 1) baixar o que mudou desde a última vez
@@ -4272,8 +4362,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function pageSync() {
     const st = SY && SY.state;
     let h = backBar('Mais', 'mais') + `<h1 class="page-title">Sincronização <span class="badge">beta</span></h1>`;
+    const logged = st && st.session && SY.keys;
+    if (logged && st.pending && !st.vault_id) return h + pendingCard(st.pending) + `<button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Cancelar e sair</button>`;
+    if (logged && st.removed && !st.vault_id) return h + `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Seu acesso ao cofre compartilhado foi removido</b> em ${fdatetime(st.removed.at)}. Os dados que já estavam neste aparelho continuam aqui, mas não sincronizam mais com aquele cofre.</div></div>
+      <button class="btn" data-act="sy-own">Sincronizar com um cofre só meu</button><button class="btn ghost" data-act="sy-logout">Sair da conta neste aparelho</button>`;
     if (!syReady()) {
+      if (S.syInvited && !S.syMode) S.syMode = 'signup';
       const sign = S.syMode === 'signup';
+      if (S.syInvited) h += `<div class="notice ok">${ic('check')}<div class="ntext"><b>Você recebeu um convite</b> para compartilhar um cofre. ${sign ? 'Crie sua conta' : 'Entre na sua conta'} para aceitar. Depois, quem convidou confere um código com você e aprova.</div></div>`;
       if (st && st.user && !st.session) h += `<div class="notice warn">${ic('alert')}<div class="ntext">A sessão de <b>${esc(st.user.email)}</b> expirou. Entre de novo para voltar a sincronizar.</div></div>`;
       h += `<p class="small muted">Mantém seus dados iguais no celular e no computador. Tudo é <b>embaralhado neste aparelho</b> antes de sair: o servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</p>
         <div class="card">
@@ -4294,15 +4390,120 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
         ${st.bad_records ? `<div class="notice danger" style="margin:12px 0 0">${ic('alert')}<div class="ntext"><b>${st.bad_records} registro(s) recusado(s)</b>: assinatura ou conteúdo não confere. Eles não foram aplicados. Se isso se repetir, avise: pode ser falha ou adulteração no servidor.</div></div>` : ''}
         <button class="btn" data-act="sy-now" style="margin-top:12px">${ic('db')} Sincronizar agora</button></div>`;
+    if (st.pending) h += pendingCard(st.pending);
+    if (S.syInvited) h += `<div class="notice ok">${ic('check')}<div class="ntext"><b>Você abriu um convite</b> para o cofre de outra pessoa. Enquanto o dono não aprovar, você continua sincronizando o seu.<br><button class="btn" data-act="sy-accept" style="margin-top:10px">Aceitar convite</button></div></div>`;
+    h += `<div class="section-title"><span>Pessoas com acesso</span></div><div id="sy-people" class="card"><div class="muted small">Carregando…</div></div>`;
+    setTimeout(syFillPeople, 0);
     if (conf.length) h += `<div class="section-title"><span>Conflitos (${conf.length})</span></div><div class="card"><p class="small muted" style="margin-top:0">O mesmo item foi alterado aqui e em outro aparelho. Ficou a versão <b>deste aparelho</b>; a outra está guardada abaixo para consulta.</p>${conf.slice().reverse().map(c => `<details class="fold" style="margin-top:8px"><summary class="small">${esc(conflictLabel(c))} · ${fdatetime(c.at)}</summary><div style="margin-top:8px">${renderValue(c.remote.item !== undefined ? c.remote.item : c.remote.value)}</div></details>`).join('')}<button class="btn ghost" data-act="sy-clear-conf">Limpar lista de conflitos</button></div>`;
     h += `<div class="card"><div class="lbl">Como funciona</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
         <li>Sincroniza sozinho ao abrir o app, ao voltar para ele e alguns segundos depois de cada alteração.</li>
         <li>Sem internet, tudo continua funcionando; envia quando a conexão voltar.</li>
         <li>Comprovantes (imagens) não sincronizam, só a lista deles.</li>
-        <li>Convidar outra pessoa (ex.: esposa) chega na próxima etapa.</li></ul></div>
+        <li>Pessoas convidadas veem e (se puderem editar) alteram os mesmos dados que você.</li></ul></div>
       <button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Sair da conta neste aparelho</button>
       <p class="help">Sair não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
     return h;
+  }
+  function pendingCard(p) {
+    return `<div class="card"><div class="lbl">Aguardando aprovação</div>
+      <p class="small" style="margin:4px 0 10px">Você pediu para entrar no cofre de <b>${esc(p.owner_email)}</b> (${p.role === 'viewer' ? 'só ver' : 'pode editar'}). Mostre este código para a pessoa: ela só deve aprovar se aparecer <b>o mesmo número</b> no celular dela.</p>
+      <div style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;margin:8px 0 14px" class="num">${esc(p.code)}</div>
+      <button class="btn" data-act="sy-check">Já aprovou? Verificar agora</button></div>`;
+  }
+  let syPeople = null;
+  async function syFillPeople() {
+    const el = document.getElementById('sy-people'); if (!el || !syReady()) return;
+    const st = SY.state, V = st.vault_id, owner = st.role === 'owner';
+    try {
+      const [mem, profs, invs] = await Promise.all([
+        rest(`vault_members?select=user_id,role,created_at&vault_id=eq.${V}`),
+        rest('profiles?select=user_id,email,enc_public_key'),
+        owner ? rest(`vault_invites?select=id,role,status,accepted_by,expires_at,created_at&vault_id=eq.${V}&status=in.(pending,accepted)&order=created_at.desc`) : Promise.resolve([])
+      ]);
+      const prof = {}; profs.forEach(x => { prof[x.user_id] = x; });
+      const myPub = prof[st.user.id] && prof[st.user.id].enc_public_key;
+      syPeople = { mem, prof, invs, myPub };
+      const roleName = r => r === 'owner' ? 'Dono' : r === 'editor' ? 'Pode editar' : 'Só vê';
+      let h = '';
+      const reqs = invs.filter(i => i.status === 'accepted' && i.accepted_by && prof[i.accepted_by]);
+      for (const i of reqs) {
+        const who = prof[i.accepted_by];
+        h += `<div class="notice warn" style="margin:0 0 12px">${ic('alert')}<div class="ntext"><b>${esc(who.email || 'Alguém')}</b> quer entrar (${roleName(i.role).toLowerCase()}). Confira o código com a pessoa antes de aprovar.
+          <div class="btn-row" style="margin-top:10px"><button class="btn secondary" data-act="sy-refuse" data-id="${esc(i.id)}">Recusar</button><button class="btn" data-act="sy-approve" data-id="${esc(i.id)}">Conferir código</button></div></div></div>`;
+      }
+      h += '<div class="rows">' + mem.sort((a, b) => (a.role === 'owner' ? -1 : b.role === 'owner' ? 1 : 0)).map(m => {
+        const me = m.user_id === st.user.id, mail = (prof[m.user_id] || {}).email || 'membro';
+        const acts = owner && !me ? `<div style="display:flex;gap:6px;width:100%;padding-left:52px;margin-top:6px"><button class="chip" data-act="sy-role" data-id="${esc(m.user_id)}" data-role="${m.role === 'editor' ? 'viewer' : 'editor'}">${m.role === 'editor' ? 'Mudar para só ver' : 'Deixar editar'}</button><button class="chip" data-act="sy-remove" data-id="${esc(m.user_id)}" style="color:var(--danger)">Remover</button></div>` : '';
+        return `<div class="row-item" style="flex-wrap:wrap"><div class="ico">${m.role === 'owner' ? '👑' : '👤'}</div><div class="main"><div class="t" style="word-break:break-all">${esc(mail)}${me ? ' (você)' : ''}</div><div class="s">${roleName(m.role)}</div></div>${acts}</div>`;
+      }).join('') + '</div>';
+      const open = invs.filter(i => i.status === 'pending' && Date.parse(i.expires_at) > Date.now());
+      if (open.length) h += `<div class="small muted" style="margin-top:10px">Convites ainda não usados: ${open.map(i => `${roleName(i.role).toLowerCase()} · expira ${fdatetime(i.expires_at)} <button class="link" data-act="sy-cancel-inv" data-id="${esc(i.id)}">cancelar</button>`).join(' · ')}</div>`;
+      if (owner) h += `<button class="btn secondary" data-act="sy-invite" style="margin-top:12px">${ic('plus')} Convidar pessoa</button>`;
+      else h += `<button class="btn ghost" data-act="sy-leave" style="margin-top:12px;color:var(--danger)">Sair deste cofre compartilhado</button>`;
+      el.innerHTML = h;
+    } catch (e) { el.innerHTML = `<div class="muted small">${esc(e.friendly ? e.message : 'Não foi possível carregar as pessoas.')}</div>`; }
+  }
+  async function syInvite() {
+    const sh = openSheet({
+      title: 'Convidar pessoa',
+      body: `<p class="small" style="margin-top:0">A pessoa recebe um link, cria a conta dela e pede para entrar. Você confere um código de 6 dígitos com ela e aprova.</p>
+        <label class="radio-card"><input type="radio" name="inv-role" value="editor" checked><div><b>Pode editar</b><div class="small muted">Vê tudo e lança, edita e exclui, como você.</div></div></label>
+        <label class="radio-card"><input type="radio" name="inv-role" value="viewer"><div><b>Só vê</b><div class="small muted">Vê saldos, contas e lançamentos, mas não altera nada.</div></div></label>`,
+      footHtml: `<button class="btn" data-ok>Criar link de convite</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const role = sh.body.querySelector('input[name=inv-role]:checked').value;
+      sh.close();
+      try {
+        const tok = Sigilo.b64.enc(crypto.getRandomValues(new Uint8Array(24))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const st = SY.state;
+        await rest('vault_invites', { method: 'POST', body: { vault_id: st.vault_id, created_by: st.user.id, role, token_hash: hexOf(await Sigilo.sha256(tok)) }, headers: { Prefer: 'return=minimal' } });
+        const link = location.origin + location.pathname + '#convite=' + tok;
+        const s2 = openSheet({
+          title: 'Link de convite',
+          body: `<p class="small" style="margin-top:0">Mande este link só para a pessoa convidada. Vale por <b>48 horas</b> e funciona <b>uma vez</b>. Quem abrir o link ainda precisa da sua aprovação com o código.</p>
+            <input class="input" id="inv-link" readonly value="${esc(link)}" style="font-size:13px">
+            <p class="help">Depois que ela entrar, volte aqui em Sincronização: vai aparecer o pedido dela.</p>`,
+          footHtml: `<div class="btn-row"><button class="btn secondary" data-copy>Copiar</button><button class="btn" data-share>Compartilhar</button></div>`
+        });
+        s2.foot.querySelector('[data-copy]').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Link copiado'); } catch (e) { const i = s2.body.querySelector('#inv-link'); i.select(); toast('Selecione e copie o link'); } };
+        s2.foot.querySelector('[data-share]').onclick = async () => { try { await navigator.share({ title: 'Convite para o Cofre', text: 'Convite para compartilharmos o Cofre (finanças):', url: link }); } catch (e) { if (e.name !== 'AbortError') s2.foot.querySelector('[data-copy]').click(); } };
+        syFillPeople();
+      } catch (e) { showError('Convite', esc(e.friendly ? e.message : 'Erro inesperado: ' + e.message)); }
+    };
+  }
+  async function syApprove(id) {
+    const P = syPeople; const i = P && P.invs.find(x => x.id === id); if (!i) return;
+    const who = P.prof[i.accepted_by]; const st = SY.state;
+    const code = await Sigilo.safetyCode(P.myPub, who.enc_public_key);
+    const ok = await confirmDialog({ title: 'Conferir código', text: `Pergunte a <b>${esc(who.email || 'pessoa')}</b> qual código aparece no celular dela. Só aprove se for exatamente:<div class="num" style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;margin:14px 0">${esc(code)}</div>Se for diferente, <b>recuse</b>: alguém pode estar tentando se passar por ela.`, ok: 'É igual: aprovar', cancel: 'Voltar' });
+    if (!ok) return;
+    try {
+      const secret = await Sigilo.unlockVaultSecret(st.wrapped_vault_key, SY.keys.encPrivate, st.vault_id);
+      const wrapped = await Sigilo.lockForMember(secret, who.enc_public_key, st.vault_id);
+      await rest('vault_members', { method: 'POST', body: { vault_id: st.vault_id, user_id: i.accepted_by, role: i.role, wrapped_vault_key: wrapped, key_version: st.key_version || 1, added_by: st.user.id }, headers: { Prefer: 'return=minimal' } });
+      await rest('vault_invites?id=eq.' + i.id, { method: 'PATCH', body: { status: 'approved' }, headers: { Prefer: 'return=minimal' } });
+      toast((who.email || 'A pessoa') + ' agora tem acesso'); syFillPeople();
+    } catch (e) { showError('Aprovação', esc(e.friendly ? e.message : 'Erro inesperado: ' + e.message)); }
+  }
+  async function syInviteStatus(id, status, msg) {
+    try { await rest('vault_invites?id=eq.' + id, { method: 'PATCH', body: { status }, headers: { Prefer: 'return=minimal' } }); toast(msg); syFillPeople(); }
+    catch (e) { showError('Convite', esc(e.friendly ? e.message : e.message)); }
+  }
+  async function syMemberRole(uid, role) {
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${uid}`, { method: 'PATCH', body: { role }, headers: { Prefer: 'return=minimal' } }); toast(role === 'viewer' ? 'Agora só vê' : 'Agora pode editar'); syFillPeople(); }
+    catch (e) { showError('Permissão', esc(e.message)); }
+  }
+  async function syRemoveMember(uid) {
+    const mail = ((syPeople && syPeople.prof[uid]) || {}).email || 'esta pessoa';
+    if (!(await confirmDialog({ title: 'Remover acesso?', text: `<b>${esc(mail)}</b> deixa de receber o que for lançado daqui para frente.<br><br>Seja realista: o que ela já viu ou já tem no aparelho dela <b>não dá para apagar</b>, por nenhum sistema.`, ok: 'Remover', danger: true }))) return;
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${uid}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }); toast('Acesso removido'); syFillPeople(); }
+    catch (e) { showError('Remover', esc(e.message)); }
+  }
+  async function syLeave() {
+    if (!(await confirmDialog({ title: 'Sair do cofre compartilhado?', text: 'Você para de ver e de sincronizar este cofre. Os dados que já estão neste aparelho continuam aqui. Para voltar, a pessoa dona precisa convidar de novo.', ok: 'Sair do cofre', danger: true }))) return;
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${SY.state.user.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }); await syUseOwn(); }
+    catch (e) { showError('Sair', esc(e.message)); }
   }
   function conflictLabel(c) {
     const r = c.remote || {}, k = r.c || r.k || c.key.replace(/^[@#]/, '').split(':')[0];
@@ -4325,6 +4526,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         openSheet({ title: 'Confirme seu e-mail', body: `<p>Enviamos um link para <b>${esc(r.email)}</b>. Abra o e-mail, toque no link e depois volte aqui e toque em <b>Entrar</b> com a mesma senha.</p><p class="small muted">Não chegou? Veja a caixa de spam. O link pode abrir uma página de erro: isso é normal por enquanto, a confirmação vale mesmo assim.</p>`, footHtml: '<button class="btn" data-close>Entendi</button>' });
         return;
       }
+      if (r.pending && !syReady()) { render(); return; } // aguardando a aprovação do dono (a tela mostra o código)
+      if (r.inviteError) showError('Convite', esc(r.inviteError));
       // Este aparelho já tinha dados e o cofre já existia: juntar ou usar só os da nuvem?
       if (!r.created && S.ds && Object.keys(S.ds).length) {
         const keep = await confirmDialog({ title: 'Este aparelho já tem dados', text: 'Sua conta já tem dados na nuvem. <b>Juntar</b> mantém os dois (itens iguais não duplicam; se o mesmo item for diferente, fica o deste aparelho e o outro vai para "Conflitos").<br><br><b>Usar só os da nuvem</b> troca os dados deste aparelho pelos da nuvem (uma cópia automática dos atuais é guardada antes).', ok: 'Juntar', cancel: 'Usar só os da nuvem' });
@@ -5019,6 +5222,16 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'sy-go': () => syGo(),
     'sy-mode': () => { S.syMode = S.syMode === 'signup' ? 'login' : 'signup'; render(); },
     'sy-now': () => syRun(true),
+    'sy-invite': () => syInvite(),
+    'sy-approve': el => syApprove(el.dataset.id),
+    'sy-refuse': el => syInviteStatus(el.dataset.id, 'revoked', 'Pedido recusado'),
+    'sy-cancel-inv': el => syInviteStatus(el.dataset.id, 'revoked', 'Convite cancelado'),
+    'sy-role': el => syMemberRole(el.dataset.id, el.dataset.role),
+    'sy-remove': el => syRemoveMember(el.dataset.id),
+    'sy-leave': () => syLeave(),
+    'sy-own': () => syUseOwn().catch(e => showError('Sincronização', esc(e.message))),
+    'sy-check': () => syCheckPending(true).catch(e => showError('Sincronização', esc(e.message))),
+    'sy-accept': async () => { try { await syAcceptInvite(); render(); } catch (e) { showError('Convite', esc(e.message)); render(); } },
     'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
     'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
@@ -5099,6 +5312,12 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     }
     if (S.meta.pin && S.ds) S.locked = true;
     await syLoad();
+    const conv = /[#&]convite=([A-Za-z0-9_-]{20,})/.exec(location.hash);
+    if (conv) { // link de convite: guarda o segredo e tira da barra de endereço
+      try { await DB.set('sync_invite', { token: conv[1], at: Date.now() }); } catch (e) { /* sem armazenamento */ }
+      history.replaceState(null, '', location.pathname + location.search);
+      S.syInvited = true; S.tab = 'mais'; S.page = 'sync';
+    } else if (await syInviteToken()) S.syInvited = true;
     render();
     if (syReady()) syRun(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
