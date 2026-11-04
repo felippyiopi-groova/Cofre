@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-w1s1zupVBFlwScSBcCxD9ddyjTs0he54sgVbln2fxWU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-9HZpK3xoqU8kTh7m844TuBPN3PwAZNmYuFMCR57QIDg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -3647,26 +3647,48 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
 
   // ---------- MAIS ----------
+  // Menu Mais organizado em grupos: conta no topo, depois ferramentas, preferências, dados e sobre.
   function viewMais() {
-    const items = [
-      ['backup', 'db', 'Backup e restauração', S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')],
-      ['sync', 'db', 'Sincronização', syReady() ? 'ligada · ' + (SY.state.last_sync_at ? 'última ' + fdatetime(SY.state.last_sync_at) : 'aguardando') : 'celular e computador iguais, com criptografia'],
-      ['moedas', 'scale', 'Moedas e câmbio', 'moeda principal ' + C.mainCurrency(S.ds) + (C.summarize(S.ds).missingRates.length ? ' · <span class="badge warn">falta cotação</span>' : '')],
-      ['docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'],
-      ['relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'],
-      ['agenda', 'cal', 'Agenda', 'calendário e linha do tempo'],
-      ['planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber, regras'],
-      ['conciliacao', 'scale', 'Conferência e conciliação', 'notas, resumo de outubro, verificação'],
-      ['auditoria', 'clock', 'Histórico de alterações', (S.ds.audit_log || []).length + ' registros'],
-      ['dados', 'file', 'Todos os dados', 'tudo o que está guardado, sem filtros'],
-      ['seguranca', 'lock', 'Segurança e privacidade', S.meta.pin ? 'PIN ativado' : 'PIN desativado'],
-      ['sobre', 'info', 'Sobre e avisos', 'versão ' + APP_VERSION]
-    ];
-    const logged = SY && SY.state && SY.state.session && SY.state.user;
-    return `<h1 class="page-title">Mais</h1><div class="card"><div class="rows">` + items.map(([p, i, t, s]) =>
-      `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${ic('right', 'chev')}</button>`).join('') + `</div></div>` +
-      (logged ? `<div class="card"><button class="row-item" data-act="sy-logout"><div class="ico" style="color:var(--danger)">${ic('logout')}</div><div class="main"><div class="t" style="color:var(--danger)">Sair da conta</div><div class="s" style="word-break:break-all">${esc(SY.state.user.email)} · os dados continuam neste aparelho</div></div></button></div>` : '');
+    const st = SY && SY.state, logged = !!(st && st.session && st.user), ready = syReady();
+    const sum = C.summarize(S.ds), auto = C.autoRatesState();
+    const row = (p, i, t, s, extra) => `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${extra || ''}${ic('right', 'chev')}</button>`;
+    const group = (title, rows) => `<div class="section-title"><span>${title}</span></div><div class="card"><div class="rows">${rows.join('')}</div></div>`;
+    let h = `<h1 class="page-title">Mais</h1>`;
+    // ---- conta ----
+    if (logged) {
+      const ini = esc((st.user.email || '?')[0].toUpperCase());
+      const status = st.pending && !st.vault_id ? 'aguardando aprovação do convite' : st.removed && !st.vault_id ? 'acesso ao cofre compartilhado removido' : ready ? (st.last_error ? '<span style="color:var(--warn)">sincronização com problema</span>' : 'sincronizado' + (st.last_sync_at ? ' · ' + fdatetime(st.last_sync_at) : '')) : 'sessão terminou: entre de novo';
+      h += `<div class="card" style="display:flex;align-items:center;gap:12px">
+          <div aria-hidden="true" style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px;flex:none">${ini}</div>
+          <div style="flex:1;min-width:0"><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div><div class="small muted">${ready ? (st.role === 'owner' ? 'Dono do cofre' : st.role === 'editor' ? 'Pode editar' : 'Só vê') + ' · ' : ''}${status}</div></div></div>
+        <div class="btn-row" style="margin:-4px 0 14px"><button class="btn secondary" data-act="page" data-tab="mais" data-page="sync">${ic('db')} Conta e pessoas</button><button class="btn secondary" data-act="sy-logout" style="color:var(--danger)">${ic('logout')} Sair</button></div>`;
+    } else {
+      h += `<div class="card"><div style="font-weight:700">Usar em outros aparelhos e com a família</div>
+          <p class="small muted" style="margin:4px 0 12px">Crie uma conta para sincronizar o celular e o computador e convidar outra pessoa. Tudo criptografado.</p>
+          <button class="btn" data-act="page" data-tab="mais" data-page="sync">Entrar ou criar conta</button></div>`;
+    }
+    // ---- grupos ----
+    h += group('Ferramentas', [
+      row('docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'),
+      row('relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'),
+      row('agenda', 'cal', 'Agenda', 'calendário e linha do tempo'),
+      row('planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber'),
+      row('conciliacao', 'scale', 'Conferência', 'notas de conciliação e verificação')
+    ]);
+    h += group('Preferências', [
+      row('moedas', 'scale', 'Moedas e câmbio', 'principal: ' + esc(C.mainCurrency(S.ds)) + ' · ' + (sum.missingRates.length ? '<span class="badge warn">falta cotação</span>' : fxOn(S.ds) ? 'cotação automática' + (auto.date ? ' de ' + esc(fdate(auto.date)) : '') : 'cotação manual')),
+      row('seguranca', 'lock', 'Segurança e privacidade', (S.meta.pin ? 'PIN ligado' : 'PIN desligado') + ' · apagar dados do aparelho'),
+      `<button class="row-item" data-act="toggle-hide"><div class="ico" style="color:var(--accent)">${ic(S.meta.hide_values ? 'eyeOff' : 'eye')}</div><div class="main"><div class="t">Esconder valores</div><div class="s">embaça os valores na tela (útil em público)</div></div>${S.meta.hide_values ? '<span class="badge" style="flex:none">ligado</span>' : '<span class="small muted" style="flex:none">desligado</span>'}</button>`
+    ]);
+    h += group('Dados e backup', [
+      row('backup', 'db', 'Backup e restauração', (S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')) + ' · GitHub'),
+      row('auditoria', 'clock', 'Histórico de alterações', (S.ds.audit_log || []).length + ' registros'),
+      row('dados', 'file', 'Todos os dados', 'tudo o que está guardado, sem filtros')
+    ]);
+    h += group('Sobre', [row('sobre', 'info', 'Sobre e avisos', 'como o app funciona · versão ' + APP_VERSION)]);
+    return h;
   }
+
 
   async function storageInfo() {
     try {
