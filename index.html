@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-/7QCdrWwbhMtkcvul872nTdLTC149NMaZZm+Ff7V1mQ='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-MDixQ03M9IzO/qBgT63vrvqXDsAnE2t0R9GVBS2Q7xU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -327,7 +327,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     cancelado: 'cancelado', cancelada: 'cancelado', canceled: 'cancelado', cancelled: 'cancelado'
   };
   const CLOSED_OBLIGATION = new Set(['pago', 'paga', 'quitado', 'quitada', 'cancelado', 'cancelada', 'paid']);
-  const CATEGORIES = ['Casa', 'Alimentação/Compras', 'Transporte', 'Lazer/Assinaturas', 'Banco/Dívidas', 'Viagem/Espanha', 'Saúde/Emergências'];
+  const CATEGORIES = ['Casa', 'Alimentação/Compras', 'Transporte', 'Lazer/Assinaturas', 'Banco/Dívidas', 'Viagem', 'Saúde/Emergências'];
 
   // ---------- utilitários ----------
   function norm(s) {
@@ -350,13 +350,22 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function num(v) {
     if (typeof v === 'number' && isFinite(v)) return v;
     if (typeof v === 'string' && v.trim() !== '') {
-      const s = v.replace(/[R$€\s]/g, '');
-      const n = Number(/,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s);
+      let s = v.replace(/[R$€\s]/g, '');
+      if (/,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); // 1.234,56
+      else if (/^[-+]?\d{1,3}(\.\d{3}){2,}$/.test(s)) s = s.replace(/\./g, ''); // 1.234.567 (pontos de milhar)
+      const n = Number(s);
       return isFinite(n) ? n : NaN;
     }
     return NaN;
   }
-  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+  // Arredonda para centavos sem o erro binário do float (10.075 → 10.08) e de forma
+  // simétrica para negativos (-1.005 → -1.01). Usa a notação 'e' para deslocar a vírgula em decimal.
+  function round2(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return n;
+    const a = Math.abs(n);
+    const r = /e/i.test(String(a)) ? Math.round(a * 100) / 100 : Number(Math.round(Number(a + 'e2')) + 'e-2');
+    return n < 0 && r !== 0 ? -r : r;
+  }
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   function dateOnly(v) {
     if (typeof v !== 'string') return null;
@@ -386,6 +395,42 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     return (ds && ds.currency_default) || 'BRL';
   }
   function isObligationOpen(o) { return !CLOSED_OBLIGATION.has(norm(o && o.status)); }
+  // Moeda de um lançamento: a informada nele ou, na falta, a da conta de origem.
+  function txCurrency(t, ds) {
+    if (t && t.currency) return String(t.currency).toUpperCase();
+    const acc = ((ds && ds.accounts) || []).find(a => isObj(a) && idOf(a) === (t && t.account_id));
+    return String((acc && acc.currency) || (ds && ds.currency_default) || 'BRL').toUpperCase();
+  }
+  // ---------- moeda principal e câmbio ----------
+  // ds.settings.main_currency: moeda em que os totais são mostrados (padrão BRL).
+  // ds.settings.exchange_rates[MOEDA] = { rate, updated_at }: 1 MOEDA = rate unidades da moeda principal.
+  // A cotação é digitada pela pessoa (o app não busca na internet).
+  function mainCurrency(ds) {
+    const st = ds && isObj(ds.settings) ? ds.settings : {};
+    return String(st.main_currency || (ds && ds.currency_default) || 'BRL').toUpperCase();
+  }
+  function rateOf(ds, cur) {
+    cur = String(cur || '').toUpperCase();
+    if (!cur || cur === mainCurrency(ds)) return 1;
+    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
+    const r = rates[cur]; const n = num(isObj(r) ? r.rate : r);
+    return n > 0 ? n : null;
+  }
+  // Valor convertido para a moeda principal, ou null se falta cotação.
+  function toMain(amount, cur, ds) {
+    const r = rateOf(ds, cur);
+    return r === null || typeof amount !== 'number' || !isFinite(amount) ? null : amount * r;
+  }
+  // Soma de contas a pagar na moeda principal. Contas sem cotação ficam fora (veja summarize().openNoRate).
+  // open=true usa o valor restante (pagamento parcial).
+  function sumObligations(list, open, ds) {
+    return round2((list || []).reduce((s, o) => { const v = toMain((open ? openAmountOf(o) : amountOf(o)) || 0, currencyOf(o, ds), ds); return s + (v || 0); }, 0));
+  }
+  // Quanto ainda falta pagar: se a conta tem "restante", vale o restante (pagamento parcial).
+  function openAmountOf(o) {
+    if (isObj(o) && o.amount_remaining_brl != null) { const r = num(o.amount_remaining_brl); if (!isNaN(r)) return r; }
+    return amountOf(o);
+  }
 
   // Coleção = lista de objetos com id/event_id.
   function isIdCollection(arr) {
@@ -582,7 +627,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (/^casa|moradia/.test(n)) return 'Casa';
     if (/lazer|assinatura/.test(n)) return 'Lazer/Assinaturas';
     if (/banco|divida/.test(n)) return 'Banco/Dívidas';
-    if (/viagem|espanha/.test(n)) return 'Viagem/Espanha';
+    if (/viagem|espanha/.test(n)) return 'Viagem'; // 'Viagem/Espanha' de backups antigos cai aqui
     if (/saude|emergenc/.test(n)) return 'Saúde/Emergências';
     return String(c);
   }
@@ -755,14 +800,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         const e = effectOn(t, id);
         if (!e) continue;
         if (txCountsForAccount(t, cutoff)) { mov += e; n++; }
-        else if (txStatus(t) !== 'confirmado') pendingMov += e;
+        else if (txStatus(t) !== 'confirmado' && txStatus(t) !== 'cancelado') pendingMov += e;
       }
       out.push({
         id, name: acc.name || id, currency: (acc.currency || ds.currency_default || 'BRL').toUpperCase(),
         status: acc.status || '', cutoff, snapshot: snap, movements: round2(mov), txCount: n,
         balance: snap === null || isNaN(snap) ? null : round2(snap + mov),
         forecastMovements: round2(pendingMov),
-        protected: /protegid|espanha/.test(norm(acc.status)),
+        protected: /protegid|espanha|reserva/.test(norm(acc.status)),
         unknown: snap === null
       });
     }
@@ -802,6 +847,23 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const brlProt = bal.filter(b => b.currency === 'BRL' && b.protected && b.balance !== null);
     const eur = bal.filter(b => b.currency === 'EUR' && b.balance !== null);
     const sum = arr => round2(arr.reduce((s, b) => s + b.balance, 0));
+    // Totais por moeda e convertidos para a moeda principal.
+    const main = mainCurrency(ds);
+    const byCur = {};
+    for (const b of bal) {
+      if (b.balance === null) continue;
+      const c = byCur[b.currency] = byCur[b.currency] || { currency: b.currency, free: 0, protected: 0, rate: rateOf(ds, b.currency), accounts: 0 };
+      if (b.protected) c.protected += b.balance; else c.free += b.balance;
+      c.accounts++;
+    }
+    let freeMain = 0, protectedMain = 0;
+    const currencies = Object.values(byCur).map(c => {
+      c.free = round2(c.free); c.protected = round2(c.protected); c.total = round2(c.free + c.protected);
+      c.converted = c.rate === null ? null : round2(c.total * c.rate);
+      if (c.rate !== null) { freeMain += c.free * c.rate; protectedMain += c.protected * c.rate; }
+      return c;
+    }).sort((a, b) => (a.currency === main ? -1 : b.currency === main ? 1 : a.currency.localeCompare(b.currency)));
+    freeMain = round2(freeMain); protectedMain = round2(protectedMain);
     const provisions = (ds.budgets || []).filter(b => {
       if (!isObj(b)) return false;
       const st = norm(b.status);
@@ -811,12 +873,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     });
     const provTotal = round2(provisions.reduce((s, b) => s + (amountOf(b) || 0), 0));
     const open = (ds.obligations || []).filter(o => isObj(o) && isObligationOpen(o));
+    const openConv = open.filter(o => rateOf(ds, currencyOf(o, ds)) !== null);
     const byMonth = {};
     for (const o of open) {
       const m = o.due_date ? String(o.due_date).slice(0, 7) : 'sem-data';
       byMonth[m] = byMonth[m] || { pendente: 0, planejado: 0, outros: 0, items: [] };
       const st = norm(o.status);
-      const a = amountOf(o) || 0;
+      const a = toMain(openAmountOf(o) || 0, currencyOf(o, ds), ds) || 0; // na moeda principal; sem cotação fica em openNoRate
       if (st === 'pendente') byMonth[m].pendente += a; else if (st === 'planejado') byMonth[m].planejado += a; else byMonth[m].outros += a;
       byMonth[m].items.push(o);
     }
@@ -828,10 +891,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       balances: bal, credit: computeCredit(ds),
       cashBRL: sum(brlFree), protectedBRL: sum(brlProt), eur: sum(eur),
       unknownAccounts: bal.filter(b => b.unknown),
-      provisions, provTotal, freeAfterProvisions: round2(sum(brlFree) - provTotal),
+      mainCurrency: main, currencies, freeMain, protectedMain, totalMain: round2(freeMain + protectedMain),
+      missingRates: currencies.filter(c => c.rate === null).map(c => c.currency),
+      provisions, provTotal, provMain: toMain(provTotal, 'BRL', ds),
+      freeAfterProvisions: round2(freeMain - (toMain(provTotal, 'BRL', ds) || 0)),
       openObligations: open, byMonth, overdue, upcoming,
-      openPending: round2(open.filter(o => norm(o.status) === 'pendente').reduce((s, o) => s + (amountOf(o) || 0), 0)),
-      openPlanned: round2(open.filter(o => norm(o.status) !== 'pendente').reduce((s, o) => s + (amountOf(o) || 0), 0))
+      openPending: sumObligations(openConv.filter(o => norm(o.status) === 'pendente'), true, ds),
+      openPlanned: sumObligations(openConv.filter(o => norm(o.status) !== 'pendente'), true, ds),
+      openNoRate: open.filter(o => rateOf(ds, currencyOf(o, ds)) === null)
     };
   }
 
@@ -841,8 +908,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!isObj(t) || txType(t) !== 'despesa' || txStatus(t) !== 'confirmado') continue;
       const m = (dateOnly(t.date) || '').slice(0, 7);
       if (!m) continue;
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {} };
-      const a = num(t.amount) || 0;
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, noRate: {} };
+      const cur = txCurrency(t, ds);
+      const a = toMain(num(t.amount) || 0, cur, ds);
+      if (a === null) { months[m].noRate[cur] = (months[m].noRate[cur] || 0) + (num(t.amount) || 0); continue; } // sem cotação: fora do total
       months[m].confirmed += a;
       const c = t.category || 'Sem categoria';
       months[m].byCat[c] = (months[m].byCat[c] || 0) + a;
@@ -850,8 +919,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     for (const [k, v] of Object.entries(ds)) {
       if (!/_summary$/.test(k) || !isObj(v) || !v.month) continue;
       const m = String(v.month).slice(0, 7);
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {} };
-      months[m].historical += num(v.paid_total_brl) || 0;
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, noRate: {} };
+      months[m].historical += toMain(num(v.paid_total_brl) || 0, 'BRL', ds) || 0;
       months[m].historicalSource = k;
     }
     return Object.values(months).map(m => Object.assign(m, { confirmed: round2(m.confirmed), historical: round2(m.historical) }))
@@ -864,6 +933,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'Preserve TODOS os campos e IDs existentes. Não renomeie IDs.',
     'Novos lançamentos vão em "transactions", cada um com "id" novo e único (ex.: tx-2026-10-26-uber-ida), "date" AAAA-MM-DD, "type" (despesa | receita | transferencia | pagamento_fatura | emprestimo | provisao | ajuste), "status" (confirmado | pendente | planejado | estimado | cancelado), "account_id" (de accounts ou credit_facilities), "amount" positivo, "currency", "category", "description", "origin" (usuario | recibo | calculo), "created_at" e "updated_at".',
     'Use status "confirmado" somente para o que o usuário confirmou que aconteceu. Compras planejadas continuam "planejado".',
+    'Contas em "accounts": "id", "name", "institution" (banco), "currency" (código ISO de 3 letras, ex.: BRL, USD, EUR), "snapshot_balance", "snapshot_date" e "status" ("operacional" ou "reserva"; reserva não entra no disponível).',
+    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações digitadas pelo usuário (1 MOEDA = "rate" na moeda principal). Não altere sem pedido explícito e não invente cotações.',
     'Não altere "snapshot_balance" nem "snapshot_date" sem pedido explícito. O app calcula: saldo = snapshot + lançamentos confirmados com data posterior ao corte.',
     'Lançamento na MESMA data do corte só entra no saldo se tiver "after_snapshot": true.',
     'Compra no cartão de crédito: type "despesa" com "account_id" = id do cartão em credit_facilities (aumenta a fatura, não desconta conta bancária). Pagamento da fatura: type "pagamento_fatura", "account_id" = conta que pagou, "to_account_id" = cartão (não é nova despesa).',
@@ -902,7 +973,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       calculated_at: nowIso,
       accounts: sum.balances.map(b => ({ id: b.id, currency: b.currency, snapshot: b.snapshot, movements_after_cutoff: b.movements, balance: b.balance })),
       brl_free_cash: sum.cashBRL, brl_protected: sum.protectedBRL, eur_total: sum.eur,
-      active_provisions_brl: sum.provTotal
+      active_provisions_brl: sum.provTotal,
+      main_currency: sum.mainCurrency, total_main: sum.totalMain, free_main: sum.freeMain, protected_main: sum.protectedMain,
+      by_currency: sum.currencies.map(c => ({ currency: c.currency, free: c.free, protected: c.protected, rate_to_main: c.rate, converted: c.converted }))
     };
     const ch = changesSince(ds, opts.base);
     out.sync = {
@@ -952,7 +1025,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
-    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, currencyOf, isObligationOpen,
+    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, toMain, currencyOf, txCurrency, isObligationOpen,
     prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
@@ -1057,7 +1130,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   const strip = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   const RULES = [
     { cat: 'Alimentação/Compras', why: 'entrega de comida', re: /\b(uber\s*eats|ifood|i\s*food|rappi|ze\s*delivery|aiqfome)\b/ },
-    { cat: 'Viagem/Espanha', why: 'viagem', re: /\b(passagem\s+aerea|passagens\s+aereas|voo|voos|aeroporto|passaporte|espanha|visto|madri|barcelona|hospedagem|hotel|airbnb)\b/ },
+    { cat: 'Viagem', why: 'viagem', re: /\b(passagem\s+aerea|passagens\s+aereas|voo|voos|aeroporto|passaporte|espanha|visto|madri|barcelona|hospedagem|hotel|airbnb)\b/ },
     { cat: 'Transporte', why: 'transporte', re: /\b(uber|99|99\s*pop|99\s*moto|corrida|corridas|moto|mototaxi|moto\s*taxi|taxi|onibus|metro|trem|brt|passagem|bilhete|bilhete\s+unico|combustivel|gasolina|etanol|alcool\s+carro|estacionamento|pedagio|cabify|indrive|indriver)\b/ },
     { cat: 'Casa', why: 'casa', re: /\b(aluguel|agua|sabesp|energia|luz|enel|eletropaulo|internet|wifi|gas|condominio|iptu|claro|vivo|tim|oi|chip|telefone|celular|advogado|imobiliaria|perua|escola|faxina|reforma|moveis?)\b/ },
     { cat: 'Alimentação/Compras', why: 'alimentação', re: /\b(almoco|almocos|jantar|janta|cafe|cafes|restaurante|lanche|lanches|lanchonete|leite|supermercado|mercado|mercearia|padaria|pao|paes|feira|acougue|hortifruti|marmita|refrigerante|refri|subway|mcdonalds|mc\s*donalds|burger|pizza|doce|doces|banana|bananas|fruta|frutas|comida|rexpar|atacadao|assai|carrefour|1a99|lojas)\b/ },
@@ -1168,7 +1241,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       const st = C.txStatus(t);
       if (st === 'cancelado') { res.cancelled++; continue; }
       const fl = flowOf(t, accountId, ds);
-      const cur = String(t.currency || (idx[t.account_id] || {}).currency || 'BRL').toUpperCase();
+      if (!isFinite(fl.amount)) { res.invalid = (res.invalid || 0) + 1; continue; } // valor ilegível: não contamina os totais
+      // Com conta filtrada, tudo está na moeda dela (ex.: transferência R$→€ entra em € na conta em euro).
+      const cur = accountId && idx[accountId] ? idx[accountId].currency : String(t.currency || (idx[t.account_id] || {}).currency || 'BRL').toUpperCase();
       const bucket = st === 'confirmado' ? res.confirmed : res.forecast;
       bucket[cur] = bucket[cur] || z();
       res.count++;
@@ -1191,6 +1266,18 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     return res;
   }
 
+  // Junta os baldes por moeda ({BRL:{in,out}, EUR:{...}}) na moeda principal. Moedas sem cotação vão em noRate.
+  function inMain(buckets, ds) {
+    const out = { in: 0, out: 0, noRate: [] };
+    for (const [cur, b] of Object.entries(buckets || {})) {
+      const r = C.rateOf(ds, cur);
+      if (r === null) { if (b.in || b.out) out.noRate.push({ currency: cur, in: b.in, out: b.out }); continue; }
+      out.in += b.in * r; out.out += b.out * r;
+    }
+    out.in = C.round2(out.in); out.out = C.round2(out.out);
+    return out;
+  }
+
   // Saldo histórico de uma conta: só conhecido a partir da data de corte.
   function balanceAt(ds, accountId, dateInclusive) {
     const a = (ds.accounts || []).find(x => x && x.id === accountId);
@@ -1203,7 +1290,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     for (const t of (ds.transactions || [])) {
       if (!t || !C.txCountsForAccount(t, cutoff)) continue;
       if ((C.dateOnly(t.date) || '') > dateInclusive) continue;
-      v += flowOf(t, accountId, ds).signed || 0;
+      const sg = flowOf(t, accountId, ds).signed;
+      if (isFinite(sg)) v += sg;
     }
     return { known: true, value: C.round2(v), cutoff };
   }
@@ -1242,7 +1330,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     };
   }
 
-  const api = { periodRange, filterTx, totals, flowOf, balanceAt, statement, historicalSummaries, obligationsIn, accountsIndex, addDays, MONTHS };
+  const api = { periodRange, filterTx, totals, flowOf, balanceAt, statement, historicalSummaries, obligationsIn, accountsIndex, addDays, MONTHS, inMain};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Reports = api;
 })(typeof self !== 'undefined' ? self : this);
 
@@ -1553,11 +1641,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const cat = categoryRows(ds, p.start, p.end);
     const ob = R.obligationsIn(ds, p.start, p.end);
     const m = baseModel('mensal', 'Relatório Financeiro Mensal', p.label, [['Mês', p.label], ['Data de corte dos saldos', fd(ds.snapshot_date)]]);
-    const c = tot.confirmed.BRL || { in: 0, out: 0 }, f = tot.forecast.BRL || { in: 0, out: 0 };
+    const MC = s.mainCurrency, c = R.inMain(tot.confirmed, ds), f = R.inMain(tot.forecast, ds);
     m.sections.push({ type: 'kpis', items: [
-      { label: 'Disponível em conta hoje', value: money(s.cashBRL), sub: 'sem crédito e reservas' },
-      { label: 'Entradas confirmadas', value: money(c.in), sub: 'lançamentos do mês' },
-      { label: 'Despesas confirmadas', value: money(c.out), sub: 'lançamentos do mês' },
+      { label: 'Disponível em conta hoje', value: money(s.freeMain, MC), sub: 'sem crédito e reservas' },
+      { label: 'Entradas confirmadas', value: money(c.in, MC), sub: 'lançamentos do mês' },
+      { label: 'Despesas confirmadas', value: money(c.out, MC), sub: 'lançamentos do mês' },
       { label: 'Previsto (não aplicado)', value: `+${money(f.in)} / −${money(f.out)}` }
     ] });
     if (cat.rows.length) {
@@ -1572,7 +1660,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       raw: [...ob.paid, ...ob.open].map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, human(o.status), { v: C.amountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor'] });
     const tb = txTable(ds, txs, null, null);
     m.sections.push({ type: 'table', title: `Lançamentos do mês (${txs.length})`, head: tb.head, rows: tb.rows, raw: tb.raw, rawHead: tb.rawHead, widths: tb.widths, primary: true, empty: 'Nenhum lançamento registrado no app neste mês.' });
-    m.sections.push({ type: 'notes', items: cat.notes.concat(['Euros (Espanha) e caixinha são reservas protegidas e não entram no disponível.', 'Crédito, cashback e valores prometidos não são dinheiro em caixa.']) });
+    m.sections.push({ type: 'notes', items: cat.notes.concat(['Contas marcadas como reserva não entram no disponível.', `Valores em outras moedas convertidos para ${MC} pela cotação informada no app${s.missingRates.length ? ' (sem cotação, fora dos totais: ' + s.missingRates.join(', ') + ')' : ''}.`, 'Crédito, cashback e valores prometidos não são dinheiro em caixa.']) });
     m.formats = ['pdf', 'png', 'xlsx', 'csv']; m.file = 'relatorio_mensal_' + month;
     return m;
   }
@@ -1592,15 +1680,15 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = baseModel('familia', 'Resumo Financeiro da Família', p.label, [['Mês', p.label], ['Semáforo', tl || 'não definido']]);
     m.traffic = tl;
     m.sections.push({ type: 'kpis', items: [
-      { label: 'Disponível em conta', value: money(s.cashBRL), tone: 'accent' },
-      { label: 'Livre após provisões', value: money(s.freeAfterProvisions) },
-      { label: 'Reserva protegida', value: money(s.protectedBRL), sub: 'caixinha' },
-      { label: 'Reserva Espanha', value: money(s.eur, 'EUR'), sub: 'em euros' }
+      { label: 'Disponível em conta', value: money(s.freeMain, s.mainCurrency), tone: 'accent' },
+      { label: 'Livre após provisões', value: money(s.freeAfterProvisions, s.mainCurrency) },
+      { label: 'Reservas', value: money(s.protectedMain, s.mainCurrency), sub: 'contas marcadas como reserva' },
+      { label: 'Patrimônio total', value: money(s.totalMain, s.mainCurrency), sub: s.missingRates.length ? 'sem ' + s.missingRates.join(', ') + ' (falta cotação)' : 'todas as moedas convertidas' }
     ] });
     if (cat.rows.length) m.sections.push({ type: 'bars', title: `Gastos de ${p.label}`, items: cat.rows.map(r => ({ label: r.cat, value: r.total, display: money(r.total) })), total: money(C.round2(cat.histTotal + cat.afterTotal)) });
     const up = s.upcoming.slice(0, 6);
-    m.sections.push({ type: 'table', title: 'Próximos vencimentos', head: ['Conta', 'Vence', 'Valor'], widths: [50, 22, 28], align: ['left', 'left', 'right'], rows: up.map(o => [oblTitle(o), fd(o.due_date), money(C.amountOf(o))]), empty: 'Nenhum vencimento com data.',
-      raw: up.map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, { v: C.amountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Valor'], list: true });
+    m.sections.push({ type: 'table', title: 'Próximos vencimentos', head: ['Conta', 'Vence', 'Valor'], widths: [50, 22, 28], align: ['left', 'left', 'right'], rows: up.map(o => [oblTitle(o), fd(o.due_date), money(C.openAmountOf(o), C.currencyOf(o))]), empty: 'Nenhum vencimento com data.',
+      raw: up.map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, { v: C.openAmountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Valor'], list: true });
     m.sections.push({ type: 'notes', items: cat.notes.concat([`A pagar em aberto: ${money(s.openPending)} pendente e ${money(s.openPlanned)} planejado.`]) });
     m.formats = ['png', 'pdf']; m.file = 'resumo_familia_' + month;
     return m;
@@ -1613,13 +1701,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = baseModel('dividas', 'Demonstrativo de Dívidas e Vencimentos', 'Contas em aberto em ' + fd(t), [['Posição em', fd(t)]]);
     m.sections.push({ type: 'kpis', items: [
       { label: 'Pendente', value: money(s.openPending), sub: 'em aberto' }, { label: 'Planejado', value: money(s.openPlanned), sub: 'ainda por vir' },
-      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(s.overdue.reduce((a, o) => a + (C.amountOf(o) || 0), 0)) : 'nenhuma' },
+      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(C.sumObligations(s.overdue, true, ds)) : 'nenhuma' },
       { label: 'Sem data definida', value: String(open.filter(o => !o.due_date).length) }
     ] });
     m.sections.push({ type: 'table', title: `Contas a pagar em aberto (${open.length})`, head: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação'], widths: [24, 13, 12, 14, 37], align: ['left', 'left', 'left', 'right', 'left'],
-      rows: open.map(o => [oblTitle(o), o.due_date ? fd(o.due_date) + (o.due_date < t ? ' (vencida)' : '') : 'sem data', human(o.status), money(C.amountOf(o), C.currencyOf(o, ds)), o.notes || '']),
+      rows: open.map(o => [oblTitle(o), o.due_date ? fd(o.due_date) + (o.due_date < t ? ' (vencida)' : '') : 'sem data', human(o.status), money(C.openAmountOf(o), C.currencyOf(o, ds)), o.notes || '']),
       foot: ['Total', '', '', money(C.round2(s.openPending + s.openPlanned)), ''], primary: true,
-      raw: open.map(o => [oblTitle(o), o.due_date ? { v: o.due_date, t: 'date' } : 'sem data', human(o.status), { v: C.amountOf(o), t: 'money' }, o.notes || '', o.id]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação', 'ID'] });
+      raw: open.map(o => [oblTitle(o), o.due_date ? { v: o.due_date, t: 'date' } : 'sem data', human(o.status), { v: C.openAmountOf(o), t: 'money' }, o.notes || '', o.id]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação', 'ID'] });
     const cr = s.credit.map(c => [human(c.name), money(c.limit), money(c.used), money(c.available), c.purchases ? money(c.purchases) : '—']);
     if (cr.length) m.sections.push({ type: 'table', title: 'Cartões de crédito', head: ['Cartão', 'Limite', 'Utilizado', 'Disponível', 'Compras após o corte'], widths: [26, 18, 18, 18, 20], align: ['left', 'right', 'right', 'right', 'right'], rows: cr,
       raw: s.credit.map(c => [human(c.name), { v: c.limit, t: 'money' }, { v: c.used, t: 'money' }, { v: c.available, t: 'money' }, { v: c.purchases, t: 'money' }]), rawHead: ['Cartão', 'Limite', 'Utilizado', 'Disponível', 'Compras após o corte'] });
@@ -1915,7 +2003,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     [/\b(casa|moradia|contas da casa)\b/, 'Casa'],
     [/\b(lazer|diversao|assinaturas?)\b/, 'Lazer/Assinaturas'],
     [/\b(banco|bancos|dividas?|juros|tarifas?)\b/, 'Banco/Dívidas'],
-    [/\b(viagem|viagens|espanha)\b/, 'Viagem/Espanha'],
+    [/\b(viagem|viagens|espanha)\b/, 'Viagem'],
     [/\b(saude|farmacia|remedios?|emergencias?)\b/, 'Saúde/Emergências']
   ];
   function explicitCategory(n) { for (const [re, c] of CAT_WORDS) if (re.test(n)) return c; return null; }
@@ -2151,13 +2239,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           });
           return { kind: 'answer', title: 'Saldo', lines, notes: [] };
         }
-        return { kind: 'answer', title: 'Disponível em conta', total: money(s.cashBRL), totalLabel: 'confirmado, sem crédito nem reservas', lines: s.balances.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.protected ? 'protegida' : '' })).concat([{ label: 'Livre após provisões', value: money(s.freeAfterProvisions), sub: 'provisões: ' + money(s.provTotal) }]), notes: [] };
+        return { kind: 'answer', title: 'Disponível em conta', total: money(s.freeMain, s.mainCurrency), totalLabel: 'confirmado, sem crédito nem reservas' + (s.missingRates.length ? ' · sem ' + s.missingRates.join(', ') + ' (falta cotação)' : ''), lines: s.balances.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.protected ? 'protegida' : '' })).concat([{ label: 'Livre após provisões', value: money(s.freeAfterProvisions), sub: 'provisões: ' + money(s.provTotal) }]), notes: [] };
       }
       case 'reserve': {
-        if (q.which === 'caixinha') return { kind: 'answer', title: 'Reserva protegida', total: money(s.protectedBRL), totalLabel: 'caixinha', lines: [], notes: ['Uso só com autorização.'] };
-        const g = (ds.goals || []).find(x => x && /spain|espanha/.test(N(x.id + ' ' + x.description)));
-        const lines = g ? [{ label: 'Meta', value: money(C.num(g.eur_goal), 'EUR'), sub: g.target_date ? 'até ' + g.target_date : '' }, { label: 'Próximo marco', value: money(C.num(g.eur_milestone), 'EUR') }] : [];
-        return { kind: 'answer', title: 'Reserva para a Espanha', total: money(s.eur, 'EUR'), totalLabel: 'Revolut EUR · sem conversão para reais', lines, notes: [] };
+        const res = s.balances.filter(b => b.protected);
+        const lines = res.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.currency !== s.mainCurrency ? (C.rateOf(ds, b.currency) ? '≈ ' + money(C.round2(b.balance * C.rateOf(ds, b.currency)), s.mainCurrency) : 'sem cotação') : '' }));
+        for (const g of (ds.goals || []).filter(x => x && x.eur_goal != null)) lines.push({ label: 'Meta: ' + (g.description || C.displayName(g.id)), value: money(C.num(g.eur_goal), 'EUR'), sub: g.target_date ? 'até ' + g.target_date : '' });
+        return { kind: 'answer', title: 'Reservas', total: money(s.protectedMain, s.mainCurrency), totalLabel: 'contas marcadas como reserva, convertidas para ' + s.mainCurrency, lines, notes: res.length ? ['Reservas não entram no disponível.'] : ['Nenhuma conta marcada como reserva. Marque ao editar a conta.'] };
       }
       case 'due': {
         const p = q.period;
@@ -2167,9 +2255,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         else list = s.upcoming.slice(0, 10);
         list.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
         const undated = s.openObligations.filter(o => !o.due_date);
-        const tot = list.reduce((a, o) => a + (C.amountOf(o) || 0), 0);
+        const tot = C.sumObligations(list, true, ds);
         return { kind: 'answer', title: q.overdue ? 'Contas vencidas' : (p ? `Vencimentos · ${p.label}` : 'Próximos vencimentos'), total: money(C.round2(tot)), totalLabel: `${list.length} conta(s)`,
-          lines: list.map(o => ({ label: o.name || o.description || C.displayName(o.id), value: money(C.amountOf(o)), sub: `${o.due_date ? 'vence ' + fd(o.due_date) : 'sem data'} · ${o.status}`, act: 'obligation', id: o.id })),
+          lines: list.map(o => ({ label: o.name || o.description || C.displayName(o.id), value: money(C.openAmountOf(o), C.currencyOf(o)), sub: `${o.due_date ? 'vence ' + fd(o.due_date) : 'sem data'} · ${o.status}`, act: 'obligation', id: o.id })),
           notes: undated.length ? [`${undated.length} conta(s) em aberto não têm data de vencimento e não aparecem nesta lista.`] : [], actions: [{ label: 'Gerar demonstrativo', act: 'doc', params: { doc: 'debts', format: 'pdf' } }] };
       }
       case 'credit': return { kind: 'answer', title: 'Cartão de crédito', lines: s.credit.map(c => ({ label: C.displayName(c.name), value: 'Disponível ' + money(c.available), sub: `limite ${money(c.limit)} · utilizado ${money(c.used)}` })), notes: ['Limite de crédito não é dinheiro em caixa.'] };
@@ -2253,6 +2341,264 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   root.DB = DB;
 })(self);
 
+/* Sigilo: criptografia de ponta a ponta da sincronização. Só WebCrypto (nada de bibliotecas).
+   - Da senha saem duas coisas no aparelho: a "prova de login" (vai ao servidor) e a chave que
+     destranca as chaves privadas (nunca sai do aparelho).
+   - Cada pessoa tem um par ECDH (receber chaves de cofre) e um par ECDSA (assinar o que grava).
+   - Cada cofre tem 32 bytes aleatórios; deles saem a chave dos dados (AES-GCM) e a do ID opaco (HMAC).
+   - A chave do cofre viaja trancada para cada membro (ECDH efêmero + HKDF + AES-GCM). */
+(function (root) {
+  'use strict';
+  const subtle = (root && root.crypto ? root.crypto : crypto).subtle;
+  const rnd = n => (root && root.crypto ? root.crypto : crypto).getRandomValues(new Uint8Array(n));
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const PBKDF2_ITER = 600000;
+  const b64 = {
+    enc(u8) { u8 = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); },
+    dec(str) { const s = atob(str); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+  };
+  const hex = buf => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const sha256 = async data => new Uint8Array(await subtle.digest('SHA-256', typeof data === 'string' ? enc.encode(data) : data));
+  const EC = { name: 'ECDH', namedCurve: 'P-256' }, SIG = { name: 'ECDSA', namedCurve: 'P-256' };
+
+  async function hkdfKey(raw, info, alg, usages) {
+    const base = await subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) }, base, alg, false, usages);
+  }
+  const AES = { name: 'AES-GCM', length: 256 };
+  async function aesEncrypt(key, bytes, aad) {
+    const iv = rnd(12);
+    const ct = await subtle.encrypt(Object.assign({ name: 'AES-GCM', iv }, aad ? { additionalData: enc.encode(aad) } : {}), key, bytes);
+    return { iv: b64.enc(iv), ct: b64.enc(new Uint8Array(ct)) };
+  }
+  async function aesDecrypt(key, box, aad) {
+    const pt = await subtle.decrypt(Object.assign({ name: 'AES-GCM', iv: b64.dec(box.iv) }, aad ? { additionalData: enc.encode(aad) } : {}), key, b64.dec(box.ct));
+    return new Uint8Array(pt);
+  }
+
+  // ---------- senha ----------
+  // Sal fixo por e-mail (o login precisa dele antes de baixar qualquer coisa). 600 mil iterações.
+  async function fromPassword(email, password, iterations) {
+    const salt = await sha256('cofre-v1|' + String(email).trim().toLowerCase());
+    const base = await subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+    const bits = new Uint8Array(await subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iterations || PBKDF2_ITER }, base, 512));
+    const authSecret = 'cv1.' + b64.enc(await sha256(bits.slice(0, 32))); // vai ao servidor no lugar da senha
+    const kek = await subtle.importKey('raw', bits.slice(32), AES, false, ['encrypt', 'decrypt']);
+    return { authSecret, kek, kdf: { alg: 'PBKDF2-SHA256', iterations: iterations || PBKDF2_ITER, salt: 'sha256(cofre-v1|email)' } };
+  }
+
+  // ---------- chave de recuperação: 32 bytes em base32 (sem letras ambíguas) ----------
+  const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  function newRecoveryCode() {
+    const bytes = rnd(32); let bits = '', out = '';
+    for (const b of bytes) bits += b.toString(2).padStart(8, '0');
+    bits = bits.padEnd(Math.ceil(bits.length / 5) * 5, '0');
+    for (let i = 0; i < bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5), 2)];
+    return out.match(/.{1,4}/g).join('-'); // 52 caracteres em 13 grupos
+  }
+  function recoveryBytes(code) {
+    const s = String(code).toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+    if (s.length !== 52 || /[^0-9A-HJKMNP-TV-Z]/.test(s)) return null;
+    let bits = ''; for (const ch of s) bits += B32.indexOf(ch).toString(2).padStart(5, '0');
+    const out = new Uint8Array(32); for (let i = 0; i < 32; i++) out[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+    return out;
+  }
+  async function recoveryKek(code) {
+    const raw = recoveryBytes(code);
+    if (!raw) throw Object.assign(new Error('Chave de recuperação inválida. Confira as letras e números.'), { friendly: true });
+    return hkdfKey(raw, 'cofre-recuperacao', AES, ['encrypt', 'decrypt']);
+  }
+
+  // ---------- chaves da pessoa ----------
+  async function newUserKeys() {
+    return { enc: await subtle.generateKey(EC, true, ['deriveBits']), sign: await subtle.generateKey(SIG, true, ['sign', 'verify']) };
+  }
+  async function publicKeys(keys) {
+    return { enc_public_key: JSON.stringify(await subtle.exportKey('jwk', keys.enc.publicKey)), sign_public_key: JSON.stringify(await subtle.exportKey('jwk', keys.sign.publicKey)) };
+  }
+  // Tranca as chaves privadas com uma chave (da senha ou da recuperação).
+  async function lockPrivate(keys, kek) {
+    const json = JSON.stringify({ v: 1, enc: await subtle.exportKey('jwk', keys.enc.privateKey), sign: await subtle.exportKey('jwk', keys.sign.privateKey) });
+    return JSON.stringify(Object.assign({ v: 1 }, await aesEncrypt(kek, enc.encode(json), 'cofre-chaves-privadas')));
+  }
+  // Destranca. extractable=false para uso normal (o navegador não deixa exportar a chave depois).
+  async function unlockPrivate(locked, kek, extractable) {
+    let pt;
+    try { pt = await aesDecrypt(kek, JSON.parse(locked), 'cofre-chaves-privadas'); }
+    catch (e) { throw Object.assign(new Error('Senha ou chave de recuperação incorreta.'), { friendly: true }); }
+    const j = JSON.parse(dec.decode(pt));
+    return {
+      encPrivate: await subtle.importKey('jwk', j.enc, EC, !!extractable, ['deriveBits']),
+      signPrivate: await subtle.importKey('jwk', j.sign, SIG, !!extractable, ['sign'])
+    };
+  }
+  // Recria o par completo a partir das privadas exportáveis (para retrancar com senha nova).
+  async function relock(locked, oldKek, newKek) {
+    const p = await unlockPrivate(locked, oldKek, true);
+    const json = JSON.stringify({ v: 1, enc: await subtle.exportKey('jwk', p.encPrivate), sign: await subtle.exportKey('jwk', p.signPrivate) });
+    return JSON.stringify(Object.assign({ v: 1 }, await aesEncrypt(newKek, enc.encode(json), 'cofre-chaves-privadas')));
+  }
+
+  // ---------- chave do cofre ----------
+  const newVaultSecret = () => rnd(32);
+  async function vaultKeys(secret) {
+    return {
+      data: await hkdfKey(secret, 'cofre-dados', AES, ['encrypt', 'decrypt']),
+      rid: await hkdfKey(secret, 'cofre-rid', { name: 'HMAC', hash: 'SHA-256', length: 256 }, ['sign'])
+    };
+  }
+  // Tranca a chave do cofre para um membro, usando só a chave PÚBLICA dele.
+  async function lockForMember(secret, memberEncPublic, vaultId) {
+    const pub = await subtle.importKey('jwk', JSON.parse(memberEncPublic), EC, false, []);
+    const eph = await subtle.generateKey(EC, true, ['deriveBits']);
+    const shared = new Uint8Array(await subtle.deriveBits({ name: 'ECDH', public: pub }, eph.privateKey, 256));
+    const k = await hkdfKey(shared, 'cofre-chave-membro|' + vaultId, AES, ['encrypt']);
+    const box = await aesEncrypt(k, secret, 'cofre-chave-do-cofre|' + vaultId);
+    return JSON.stringify({ v: 1, epk: await subtle.exportKey('jwk', eph.publicKey), iv: box.iv, ct: box.ct });
+  }
+  async function unlockVaultSecret(locked, myEncPrivate, vaultId) {
+    try {
+      const j = JSON.parse(locked);
+      const epk = await subtle.importKey('jwk', j.epk, EC, false, []);
+      const shared = new Uint8Array(await subtle.deriveBits({ name: 'ECDH', public: epk }, myEncPrivate, 256));
+      const k = await hkdfKey(shared, 'cofre-chave-membro|' + vaultId, AES, ['decrypt']);
+      return await aesDecrypt(k, j, 'cofre-chave-do-cofre|' + vaultId);
+    } catch (e) { throw Object.assign(new Error('Não foi possível abrir a chave deste cofre neste aparelho.'), { friendly: true }); }
+  }
+
+  // ---------- registros ----------
+  // ID opaco: o servidor não vê "tx-2026-10-26-uber"; vê um HMAC.
+  async function rid(ridKey, text) { return hex(await subtle.sign('HMAC', ridKey, enc.encode(text))).slice(0, 40); }
+  // O texto amarrado (AAD) impede o servidor de trocar um registro de lugar ou de cofre sem ser notado.
+  const aadOf = (vaultId, r, kv) => `cofre-registro|${vaultId}|${r}|${kv}`;
+  async function sealRecord(dataKey, vaultId, r, kv, obj) {
+    const box = await aesEncrypt(dataKey, enc.encode(JSON.stringify(obj)), aadOf(vaultId, r, kv));
+    return { iv: box.iv, ciphertext: box.ct };
+  }
+  async function openRecord(dataKey, vaultId, r, kv, row) {
+    const pt = await aesDecrypt(dataKey, { iv: row.iv, ct: row.ciphertext }, aadOf(vaultId, r, kv));
+    return JSON.parse(dec.decode(pt));
+  }
+  const sigText = (vaultId, r, kv, iv, ct, deleted) => `cofre-assinatura|${vaultId}|${r}|${kv}|${iv}|${ct}|${deleted ? 1 : 0}`;
+  async function signRecord(signPrivate, vaultId, r, kv, iv, ct, deleted) {
+    return b64.enc(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signPrivate, enc.encode(sigText(vaultId, r, kv, iv, ct, deleted)))));
+  }
+  async function verifyRecord(signPublic, vaultId, r, kv, iv, ct, deleted, sig) {
+    try {
+      const pub = await subtle.importKey('jwk', JSON.parse(signPublic), SIG, false, ['verify']);
+      return await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, b64.dec(sig), enc.encode(sigText(vaultId, r, kv, iv, ct, deleted)));
+    } catch (e) { return false; }
+  }
+
+  // Código de 6 dígitos que as duas pessoas comparam ao aprovar um convite.
+  async function safetyCode(pubA, pubB) {
+    const norm = p => { const j = JSON.parse(p); return j.x + '.' + j.y; };
+    const pair = [norm(pubA), norm(pubB)].sort().join('|');
+    const h = await sha256('cofre-codigo|' + pair);
+    const n = ((h[0] << 24) >>> 0) + (h[1] << 16) + (h[2] << 8) + h[3];
+    return String(n % 1000000).padStart(6, '0');
+  }
+
+  const api = {
+    PBKDF2_ITER, b64, sha256, fromPassword, newRecoveryCode, recoveryBytes, recoveryKek,
+    newUserKeys, publicKeys, lockPrivate, unlockPrivate, relock,
+    newVaultSecret, vaultKeys, lockForMember, unlockVaultSecret,
+    rid, sealRecord, openRecord, signRecord, verifyRecord, safetyCode
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Sigilo = api;
+})(typeof self !== 'undefined' ? self : this);
+
+/* Sincronização: transforma os dados em registros independentes, decide o que enviar,
+   o que aplicar e o que é conflito. Sem rede nem criptografia aqui (funções puras, testáveis).
+   Registro = { key, ... }:
+     "colecao:id" → { key, c, item }      um item de uma lista com IDs (lançamento, conta…)
+     "#colecao"   → { key, k, collection } marca que a chave é uma lista com IDs (mesmo vazia)
+     "@chave"     → { key, k, value }      qualquer outro valor (data de corte, configurações…)
+   "base" = o que este aparelho sabe que está no servidor: { key: hash }. */
+(function (root) {
+  'use strict';
+  const C = (typeof module !== 'undefined' && module.exports) ? require('./core.js') : root.Core;
+  const subtle = (root && root.crypto ? root.crypto : crypto).subtle;
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const isCollection = arr => Array.isArray(arr) && arr.every(x => isObj(x) && C.idOf(x) !== undefined);
+
+  function split(ds) {
+    const out = new Map();
+    for (const k of Object.keys(ds || {})) {
+      const v = ds[k];
+      if (v === undefined) continue;
+      if (isCollection(v)) {
+        out.set('#' + k, { key: '#' + k, k, collection: true });
+        for (const it of v) { const key = k + ':' + C.idOf(it); out.set(key, { key, c: k, item: it }); }
+      } else out.set('@' + k, { key: '@' + k, k, value: v });
+    }
+    return out;
+  }
+  async function hashOf(p) {
+    const buf = await subtle.digest('SHA-256', new TextEncoder().encode(C.stable(p)));
+    return Array.from(new Uint8Array(buf).slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  async function hashes(ds) {
+    const recs = split(ds), h = {};
+    for (const [k, p] of recs) h[k] = await hashOf(p);
+    return { recs, h };
+  }
+  // Aplica um registro (ou a exclusão dele) aos dados. Muda ds no lugar.
+  function apply(ds, p) {
+    const key = p.key;
+    if (key[0] === '#') {
+      const k = key.slice(1);
+      if (p.deleted) { if (Array.isArray(ds[k]) && !ds[k].length) delete ds[k]; }
+      else if (!Array.isArray(ds[k])) ds[k] = [];
+      return;
+    }
+    if (key[0] === '@') {
+      const k = key.slice(1);
+      if (p.deleted) { if (!isCollection(ds[k]) || !ds[k].length) delete ds[k]; }
+      else ds[k] = C.clone(p.value);
+      return;
+    }
+    const i = key.indexOf(':'), k = key.slice(0, i), id = key.slice(i + 1);
+    if (!Array.isArray(ds[k])) { if (p.deleted) return; ds[k] = []; }
+    const pos = ds[k].findIndex(x => isObj(x) && C.idOf(x) === id);
+    if (p.deleted) { if (pos >= 0) ds[k].splice(pos, 1); return; }
+    if (pos >= 0) ds[k][pos] = C.clone(p.item); else ds[k].push(C.clone(p.item));
+  }
+  /* Junta o que veio do servidor. remote = [{ payload, hash }] em ordem de revisão.
+     Regra: se este aparelho NÃO mexeu no registro desde a última sincronização, vale o do servidor.
+     Se os dois mexeram de jeitos diferentes, fica o deste aparelho (será enviado) e a outra versão
+     é devolvida em "conflicts" para a pessoa poder consultar. */
+  async function merge(ds, base, remote) {
+    const out = C.clone(ds || {}), b = Object.assign({}, base);
+    const { h: localH } = await hashes(out);
+    let applied = 0, deletions = 0; const conflicts = [], appliedList = [];
+    for (const { payload, hash } of remote) {
+      const key = payload.key, remoteH = payload.deleted ? undefined : hash;
+      const L = localH[key], B = b[key];
+      if (L === remoteH) { if (remoteH === undefined) delete b[key]; else b[key] = remoteH; continue; }
+      if (L === B) {
+        apply(out, payload); applied++; appliedList.push(payload); if (payload.deleted) deletions++;
+        if (remoteH === undefined) { delete b[key]; delete localH[key]; } else { b[key] = remoteH; localH[key] = remoteH; }
+      } else {
+        conflicts.push({ key, remote: payload, at: new Date().toISOString() });
+        if (remoteH === undefined) delete b[key]; else b[key] = remoteH; // força o envio da versão local
+      }
+    }
+    return { ds: out, base: b, applied, deletions, conflicts, appliedList };
+  }
+  // O que enviar: registros novos/alterados e exclusões (o que sumiu daqui desde a base).
+  async function plan(ds, base) {
+    const { recs, h } = await hashes(ds || {});
+    const ups = [], dels = [];
+    for (const [k, p] of recs) if (base[k] !== h[k]) ups.push({ payload: p, hash: h[k] });
+    for (const k of Object.keys(base)) if (!recs.has(k)) dels.push({ payload: { key: k, deleted: true } });
+    return { ups, dels };
+  }
+
+  const api = { split, hashOf, hashes, apply, merge, plan, isCollection };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Sync = api;
+})(typeof self !== 'undefined' ? self : this);
+
 /* Cofre Financeiro Familiar — interface. Depende de Core, Zip, DB. */
 (function () {
   'use strict';
@@ -2335,7 +2681,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function slug(s) { return C.norm(s).replace(/[^a-z0-9_]/g, '').replace(/_+/g, '-').slice(0, 24) || 'item'; }
   function rand(n) { const a = crypto.getRandomValues(new Uint8Array(n)); return Array.from(a).map(b => b.toString(16).padStart(2, '0')).join(''); }
 
-  const ACCOUNT_STATUS = { operacional: 'Operacional', colchao: 'Colchão', protegida: 'Protegida', espanha: 'Reserva Espanha', saldo_desconhecido: 'Saldo desconhecido' };
+  const ACCOUNT_STATUS = { operacional: 'Operacional', reserva: 'Reserva', encerrada: 'Encerrada', colchao: 'Colchão', protegida: 'Protegida', espanha: 'Reserva Espanha', saldo_desconhecido: 'Saldo desconhecido' };
   const TYPE_LABEL = { despesa: 'Despesa', receita: 'Receita', transferencia: 'Transferência entre contas', pagamento_fatura: 'Pagamento de fatura', emprestimo: 'Empréstimo recebido', ajuste: 'Ajuste de saldo', provisao: 'Provisão' };
   const STATUS_LABEL = { confirmado: 'Confirmado (pago)', pendente: 'Pendente', planejado: 'Planejado', estimado: 'Estimado', cancelado: 'Cancelado' };
   const ORIGIN_LABEL = { usuario: 'Usuário', recibo: 'Recibo', calculo: 'Cálculo' };
@@ -2494,6 +2840,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     catch (e) { showError('Não foi possível salvar', 'Nada foi alterado. Detalhe técnico: ' + esc(e && e.message)); throw e; }
     S.ds = newDs; S.meta = meta;
     render();
+    if (syReady()) syLater();
     if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
   }
   async function saveMeta(patch) { S.meta = Object.assign({}, S.meta, patch); await DB.set('meta', S.meta); }
@@ -2506,6 +2853,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     document.body.classList.toggle('hide-values', !!S.meta.hide_values);
     if (S.locked) { renderLock(); return; }
     const lk = document.querySelector('.lock'); if (lk) lk.remove();
+    if (!S.ds && S.page === 'sync') { app.innerHTML = `<button class="back" data-act="tab" data-tab="inicio">${ic('left')}Voltar</button>` + pageSync().replace(/^<button class="back"[^>]*>[\s\S]*?<\/button>/, ''); renderTabbar(false); renderAskbar(false); return; }
     if (!S.ds) { app.innerHTML = viewWelcome(); renderTabbar(false); renderAskbar(false); return; }
     const y = window.scrollY;
     const key = S.tab + '/' + (S.page || '');
@@ -2546,7 +2894,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     </div>
     ${needsInstall ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Instale antes de importar.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra o app pelo ícone e importe lá dentro. Os dados do Safari e do app instalado ficam em lugares separados.</div></div>` : ''}
     <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
-    <button class="btn" data-act="import">${ic('up')} Importar backup JSON</button>
+    <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
+    <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
+    <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
     <p class="help" style="text-align:center;margin-top:12px">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>`;
   }
   const WARNING_TEXT = 'Dados salvos neste dispositivo podem ser perdidos se o navegador limpar armazenamento, o aparelho for restaurado ou o app for removido. Faça backup externo.';
@@ -2557,50 +2907,67 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const lvl = tl && tl.level ? String(tl.level).toUpperCase() : null;
     return `<button class="light ${lvl || 'none'}" data-act="light" aria-label="Semáforo de liquidez: ${esc(lvl || 'não definido')}">${esc(lvl || 'SEM SEMÁFORO')}</button>`;
   }
+  // Nome da moeda em português (ex.: EUR → euro). Cai no código se o navegador não souber.
+  let curNames;
+  function curName(code) {
+    try { curNames = curNames || new Intl.DisplayNames(['pt-BR'], { type: 'currency' }); return (curNames.of(code) || code).toLowerCase(); } catch (e) { return code; }
+  }
+  // Bloco "outras moedas": saldo original, cotação e valor convertido.
+  function currenciesBlock(sum) {
+    const others = sum.currencies.filter(c => c.currency !== sum.mainCurrency);
+    if (!others.length) return '';
+    const MC = sum.mainCurrency;
+    return `<div class="section-title"><span>Outras moedas</span><button class="link" data-act="page" data-tab="mais" data-page="moedas">Cotações</button></div><div class="card"><div class="rows">` +
+      others.map(c => `<button class="row-item" data-act="page" data-tab="mais" data-page="moedas"><div class="ico">${esc(c.currency)}</div>
+        <div class="main"><div class="t">${M(c.total, c.currency)}</div><div class="s">${c.rate === null ? '<span class="badge warn">sem cotação</span> fora do patrimônio total' : esc('1 ' + c.currency + ' = ' + money(c.rate, MC).replace(/\s/g, ' '))}${c.protected ? ' · ' + M(c.protected, c.currency) + ' em reserva' : ''}</div></div>
+        <div class="amt">${c.converted === null ? '<span class="muted">—</span>' : '≈ ' + M(c.converted, MC)}</div></button>`).join('') + `</div></div>`;
+  }
   function viewInicio() {
-    const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
+    const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today), MC = sum.mainCurrency;
     const mp = Reports.periodRange('mes', today);
     const mt = Reports.totals(ds, Reports.filterTx(ds, { start: mp.start, end: mp.end }));
-    const conf = mt.confirmed.BRL || { in: 0, out: 0 }, prev = mt.forecast.BRL || { in: 0, out: 0 };
+    const conf = Reports.inMain(mt.confirmed, ds), prev = Reports.inMain(mt.forecast, ds);
     const ob = Reports.obligationsIn(ds, mp.start, mp.end);
     const hist = Reports.historicalSummaries(ds, mp.start, mp.end)[0];
-    const patrimonio = C.round2(sum.cashBRL + sum.protectedBRL);
     const lastExp = S.meta.last_export_at;
     let h = `<div class="topbar"><div><div class="hello">${esc(new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }))}</div><div class="name">Meu banco pessoal</div></div>
       <div style="display:flex;gap:8px;align-items:center">${lightPill()}<button class="icon-btn" data-act="toggle-hide" aria-label="${S.meta.hide_values ? 'Mostrar valores' : 'Esconder valores'}">${ic(S.meta.hide_values ? 'eyeOff' : 'eye')}</button></div></div>`;
     if (S.meta.dirty) h += `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Backup pendente.</b> Há alterações desde ${lastExp ? 'o último backup (' + fdatetime(lastExp) + ')' : 'que o app foi preenchido'}. <button class="link" data-act="export" data-kind="json">Exportar agora</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>${sum.overdue.length} conta(s) com vencimento passado</b> ainda em aberto. <button class="link" data-act="tab" data-tab="contas">Ver</button></div></div>`;
     h += `<section class="hero" aria-label="Patrimônio">
-      <div class="label">Patrimônio em reais · dinheiro próprio conhecido</div>
-      <div class="big">${M(patrimonio)}</div>
+      <div class="label">Patrimônio total em ${esc(curName(MC))} · dinheiro próprio conhecido</div>
+      <div class="big">${M(sum.totalMain, MC)}</div>
       <div class="row">
-        <div class="pill"><div class="k">Disponível em conta</div><div class="v">${M(sum.cashBRL)}</div></div>
-        <div class="pill"><div class="k">Reserva protegida</div><div class="v">${M(sum.protectedBRL)}</div></div>
+        <div class="pill"><div class="k">Disponível em conta</div><div class="v">${M(sum.freeMain, MC)}</div></div>
+        <div class="pill"><div class="k">Reservas</div><div class="v">${M(sum.protectedMain, MC)}</div></div>
       </div>
-      <div class="row" style="margin-top:8px">
-        <div class="pill"><div class="k">Provisões reservadas</div><div class="v">${M(sum.provTotal)}</div></div>
-        <div class="pill"><div class="k">Livre após provisões</div><div class="v">${M(sum.freeAfterProvisions)}</div></div>
-      </div>
-      <div class="foot">Saldos de corte (${fdate(ds.snapshot_date)}) + lançamentos confirmados. Não inclui crédito, euros, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
+      ${sum.provTotal ? `<div class="row" style="margin-top:8px">
+        <div class="pill"><div class="k">Provisões reservadas</div><div class="v">${sum.provMain === null ? M(sum.provTotal) : M(sum.provMain, MC)}</div></div>
+        <div class="pill"><div class="k">Livre após provisões</div><div class="v">${M(sum.freeAfterProvisions, MC)}</div></div>
+      </div>` : ''}
+      <div class="foot">Saldo informado de cada conta + lançamentos confirmados${sum.currencies.length > 1 ? ', outras moedas convertidas pela cotação que você informou' : ''}. Não inclui crédito, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
     </section>
+    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Falta cotação:</b> ${esc(sum.missingRates.join(', '))} ficam fora do patrimônio total. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>` : ''}
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
       <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
       <button data-act="tab" data-tab="pergunte"><span>${ic('chat')}</span>Pergunte</button>
       <button data-act="page" data-tab="mais" data-page="docs"><span>${ic('file')}</span>Documentos</button>
     </div>
-    <div class="stat gold" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center"><div><div class="k">✈️ Reserva Espanha · Revolut EUR</div><div class="v">${M(sum.eur, 'EUR')}</div><div class="s">separada, sem conversão para reais</div></div>${ic('lock', 'chev')}</div>`;
+    `;
 
-    h += `<div class="section-title"><span>Contas</span></div><div class="card"><div class="rows">`;
+    h += `<div class="section-title"><span>Contas</span><button class="link" data-act="acc-new">+ Nova conta</button></div><div class="card"><div class="rows">`;
+    if (!sum.balances.length) h += `<div class="muted small">Nenhuma conta cadastrada. Toque em <b>+ Nova conta</b> para informar banco, moeda e saldo.</div>`;
     for (const b of sum.balances) {
       const st = C.norm(b.status);
       const badge = b.unknown ? '<span class="badge warn">saldo desconhecido</span>' : (b.protected ? `<span class="badge gold">${esc(ACCOUNT_STATUS[st] || humanize(b.status))}</span>` : `<span class="badge">${esc(ACCOUNT_STATUS[st] || humanize(b.status))}</span>`);
-      const sub = b.unknown ? 'Valor não informado' : (b.txCount ? `${b.movements >= 0 ? '+' : '−'}${money(Math.abs(b.movements), b.currency)} desde o corte` : `corte ${fdate(b.cutoff).slice(0, 5)}`);
-      h += `<button class="row-item" data-act="account" data-id="${esc(b.id)}"><div class="ico">${b.currency === 'EUR' ? '€' : (b.protected ? '🔒' : '🏦')}</div>
+      const sub = b.unknown ? 'Valor não informado' : (b.txCount ? `${b.movements >= 0 ? '+' : '−'}${money(Math.abs(b.movements), b.currency)} desde ${fdate(b.cutoff).slice(0, 5)}` : `saldo de ${fdate(b.cutoff).slice(0, 5)}`);
+      h += `<button class="row-item" data-act="account" data-id="${esc(b.id)}"><div class="ico">${b.currency !== MC ? esc(b.currency) : (b.protected ? '🔒' : '🏦')}</div>
         <div class="main"><div class="t">${esc(b.name)}</div><div class="s">${badge} <span class="${S.meta.hide_values ? 'money' : ''}">${esc(sub)}</span></div></div>
         <div class="amt">${b.balance === null ? '<span class="muted">—</span>' : M(b.balance, b.currency)}</div></button>`;
     }
     h += `</div></div>`;
+    h += currenciesBlock(sum);
 
     for (const cf of sum.credit) h += creditCardBlock(cf);
     if (ds.cashback && typeof ds.cashback === 'object') {
@@ -2610,13 +2977,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
     h += `<div class="section-title"><span>${esc(monthLabel(mp.month))}</span><button class="link" data-act="page" data-tab="mais" data-page="relatorios">Relatórios</button></div>
       <div class="stat-grid">
-        <div class="stat"><div class="k">Entradas confirmadas</div><div class="v" style="color:var(--pos)">${M(conf.in)}</div><div class="s">lançadas no app</div></div>
-        <div class="stat"><div class="k">Despesas confirmadas</div><div class="v">${M(conf.out)}</div><div class="s">${mt.credit ? 'inclui ' + esc(money(mt.credit)) + ' no crédito' : 'lançadas no app'}</div></div>
+        <div class="stat"><div class="k">Entradas confirmadas</div><div class="v" style="color:var(--pos)">${M(conf.in, MC)}</div><div class="s">lançadas no app</div></div>
+        <div class="stat"><div class="k">Despesas confirmadas</div><div class="v">${M(conf.out, MC)}</div><div class="s">${mt.credit ? 'inclui ' + esc(money(mt.credit)) + ' no crédito' : 'lançadas no app'}</div></div>
       </div>`;
-    if (prev.in || prev.out) h += `<div class="notice info">${ic('clock')}<div class="ntext"><b>Previsto, ainda não aplicado:</b> entradas ${M(prev.in)} · saídas ${M(prev.out)}.</div></div>`;
+    if (prev.in || prev.out) h += `<div class="notice info">${ic('clock')}<div class="ntext"><b>Previsto, ainda não aplicado:</b> entradas ${M(prev.in, MC)} · saídas ${M(prev.out, MC)}.</div></div>`;
+    if (conf.noRate.length) h += `<p class="small muted" style="margin:-4px 4px 12px">Fora dos totais por falta de cotação: ${conf.noRate.map(x => esc('+' + money(x.in, x.currency) + ' / −' + money(x.out, x.currency))).join(' · ')}.</p>`;
     if (hist) h += `<p class="small muted" style="margin:-4px 4px 12px">Resumo histórico do mês: ${M(C.num(hist.data.paid_total_brl))} pagos até ${fdate(ds.snapshot_date)} (informado no backup, já dentro dos saldos de corte).</p>`;
-    const paidTot = ob.paid.reduce((s, o) => s + (C.amountOf(o) || 0), 0), openTot = ob.open.reduce((s, o) => s + (C.amountOf(o) || 0), 0);
-    h += `<button class="card row-item" style="border:0;width:100%" data-act="tab" data-tab="contas"><div class="main"><div class="t">Contas do mês</div><div class="s">${ob.paid.length} paga(s) · ${ob.open.length} em aberto${ob.undated.length ? ' · ' + ob.undated.length + ' sem data' : ''}</div></div><div class="amt"><span class="money" style="color:var(--pos)">${esc(money(paidTot))}</span><div class="s"><span class="money">${esc(money(openTot))} em aberto</span></div></div>${ic('right', 'chev')}</button>`;
+    const paidTot = C.sumObligations(ob.paid, false, ds), openTot = C.sumObligations(ob.open, true, ds);
+    h += `<button class="card row-item" style="border:0;width:100%" data-act="tab" data-tab="contas"><div class="main"><div class="t">Contas do mês</div><div class="s">${ob.paid.length} paga(s) · ${ob.open.length} em aberto${ob.undated.length ? ' · ' + ob.undated.length + ' sem data' : ''}</div></div><div class="amt"><span class="money" style="color:var(--pos)">${esc(money(paidTot, MC))}</span><div class="s"><span class="money">${esc(money(openTot, MC))} em aberto</span></div></div>${ic('right', 'chev')}</button>`;
 
     const next = sum.upcoming.slice(0, 4);
     h += `<div class="section-title"><span>Próximos vencimentos</span><button class="link" data-act="tab" data-tab="contas">Ver todos</button></div><div class="card">`;
@@ -2704,7 +3072,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const over = o.due_date && o.due_date < today && C.isObligationOpen(o);
     return `<button class="row-item" data-act="obligation" data-id="${esc(o.id)}"><div class="ico">${catIcon(guessCategory(o), '📄')}</div>
       <div class="main"><div class="t">${esc(obligationTitle(o))}</div><div class="s">${statusBadge(o.status)} ${o.due_date ? (over ? '<b style="color:var(--danger)">venceu ' + fdate(o.due_date) + '</b>' : 'vence ' + fdate(o.due_date)) : 'sem vencimento definido'}</div></div>
-      <div class="amt ${/planejad/.test(C.norm(o.status)) ? 'forecast' : ''}">${M(C.amountOf(o), C.currencyOf(o, S.ds))}</div></button>`;
+      <div class="amt ${/planejad/.test(C.norm(o.status)) ? 'forecast' : ''}">${M(C.isObligationOpen(o) ? C.openAmountOf(o) : C.amountOf(o), C.currencyOf(o, S.ds))}</div></button>`;
   }
   function expensesChart(ds) {
     const data = C.monthlyExpenses(ds).slice(-6);
@@ -2718,7 +3086,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${d.confirmed ? `<div class="bar" style="height:${Math.max(3, d.confirmed / max * 100)}%"></div>` : ''}
         <div class="bl">${monthLabel(d.month, true)}</div></div>`;
     }
-    h += `</div><div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
+    const MC = C.mainCurrency(ds), nr = data.filter(d => Object.keys(d.noRate || {}).length);
+    h += `</div><div class="tiny muted" style="margin-top:8px">Valores em ${esc(curName(MC))}${C.summarize(ds).currencies.length > 1 ? ', outras moedas convertidas pela cotação informada' : ''}.${nr.length ? ' Sem cotação, fora do gráfico: ' + nr.map(d => esc(monthLabel(d.month, true)) + ' ' + Object.entries(d.noRate).map(([c, v]) => esc(money(v, c))).join(' + ')).join(' · ') + '.' : ''}</div><div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
     return h;
   }
 
@@ -3035,7 +3404,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       const ob = q('f-obl'); if (ob) ob.onchange = () => {
         readInputs();
         const o = (ds.obligations || []).find(x => x.id === d.obligation_id);
-        if (o && !d.amount) d.amount = String(C.amountOf(o)).replace('.', ',');
+        if (o && !d.amount) d.amount = String(C.openAmountOf(o)).replace('.', ',');
         if (o && !d.description) d.description = 'Pagamento ' + obligationTitle(o);
         if (o && !d.catManual) { d.category = guessCategory(o); d.catManual = true; }
         draw();
@@ -3069,7 +3438,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (/emprest|cartao|reneg|facil|dm_|_dm|juros/.test(n)) return 'Banco/Dívidas';
     if (/aluguel|enel|agua|internet|chip|claro|imobil|advog/.test(n)) return 'Casa';
     if (/psn|icloud|stream|assinat/.test(n)) return 'Lazer/Assinaturas';
-    if (/passaporte|espanha|viagem/.test(n)) return 'Viagem/Espanha';
+    if (/passaporte|espanha|viagem/.test(n)) return 'Viagem';
     if (/leite|mercado|aliment/.test(n)) return 'Alimentação/Compras';
     if (/saude|remed|medic/.test(n)) return 'Saúde/Emergências';
     if (/transport|uber|perua/.test(n)) return 'Transporte';
@@ -3109,7 +3478,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function viewContas() {
     const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
     let h = `<h1 class="page-title">Contas a pagar</h1>
-      <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned)}</div><div class="s">ainda por vir</div></div></div>`;
+      <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending, sum.mainCurrency)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned, sum.mainCurrency)}</div><div class="s">ainda por vir</div></div></div>`;
+    if (sum.openNoRate.length) h += `<div class="notice info">${ic('info')}<div class="ntext">Totais em ${esc(curName(sum.mainCurrency))}. Fora deles, por falta de cotação: ${sum.openNoRate.map(o => esc(obligationTitle(o)) + ' (' + esc(money(C.openAmountOf(o), C.currencyOf(o, ds))) + ')').join(', ')}. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>Vencimento passado:</b> ${sum.overdue.map(o => esc(obligationTitle(o))).join(', ')}. Se já pagou, toque na conta e registre o pagamento.</div></div>`;
     const months = Object.keys(sum.byMonth).sort((a, b) => a === 'sem-data' ? 1 : b === 'sem-data' ? -1 : a.localeCompare(b));
     if (!months.length) h += `<div class="card empty"><div class="e-ico">✅</div>Nenhuma conta em aberto.</div>`;
@@ -3142,7 +3512,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (pay) pay.onclick = () => {
       sh.close();
       const acc = (S.ds.accounts || []).find(a => a.id === 'nubank_debito') || (S.ds.accounts || [])[0] || {};
-      openTxForm(null, { type: 'despesa', amount: String(C.amountOf(o)).replace('.', ','), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), status: 'confirmado', account_id: acc.id || '' });
+      openTxForm(null, { type: 'despesa', amount: String(C.openAmountOf(o)).replace('.', ','), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), status: 'confirmado', account_id: acc.id || '' });
     };
     sh.foot.querySelector('[data-edit]').onclick = () => { sh.close(); editObligation(o); };
   }
@@ -3177,7 +3547,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function eventsIndex(ds, ym) {
     const ev = {};
     const add = (d, e) => { if (!d) return; (ev[d] = ev[d] || []).push(e); };
-    (ds.obligations || []).forEach(o => { if (o && o.due_date && C.isObligationOpen(o)) add(o.due_date, { kind: 'due', title: obligationTitle(o), amount: C.amountOf(o), status: o.status, act: 'obligation', id: o.id }); });
+    (ds.obligations || []).forEach(o => { if (o && o.due_date && C.isObligationOpen(o)) add(o.due_date, { kind: 'due', title: obligationTitle(o), amount: C.openAmountOf(o), status: o.status, act: 'obligation', id: o.id }); });
     (ds.income_forecasts || []).forEach(r => {
       if (!r) return;
       if (r.date) add(C.dateOnly(r.date), { kind: 'inc', title: humanize(r.id), amount: C.amountOf(r), status: r.status, act: 'raw', key: 'income_forecasts', id: r.id });
@@ -3242,6 +3612,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function viewMais() {
     const items = [
       ['backup', 'db', 'Backup e restauração', S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')],
+      ['sync', 'db', 'Sincronização', syReady() ? 'ligada · ' + (SY.state.last_sync_at ? 'última ' + fdatetime(SY.state.last_sync_at) : 'aguardando') : 'celular e computador iguais, com criptografia'],
+      ['moedas', 'scale', 'Moedas e câmbio', 'moeda principal ' + C.mainCurrency(S.ds) + (C.summarize(S.ds).missingRates.length ? ' · <span class="badge warn">falta cotação</span>' : '')],
       ['docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'],
       ['relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'],
       ['agenda', 'cal', 'Agenda', 'calendário e linha do tempo'],
@@ -3278,6 +3650,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         <p class="help" style="margin-top:10px">Ao exportar, escolha <b>Salvar em Arquivos</b>. Guarde <b>duas cópias</b> em lugares diferentes (ex.: iCloud Drive e Google Drive ou e-mail). Para enviar ao ChatGPT, use o JSON comum, não o criptografado.</p>
         ${att ? '' : '<p class="help">Comprovantes: nenhum anexado ainda. Quando houver, o JSON avisa que eles não vão junto e oferece o ZIP.</p>'}
       </div>
+      <div class="section-title"><span>GitHub</span></div>
+      <div class="card">${S.meta.github && S.meta.github.token
+        ? `<div class="small muted" style="margin-bottom:10px;word-break:break-all">${esc(S.meta.github.owner + '/' + S.meta.github.repo)} · último envio: ${S.meta.github.last_push_at ? fdatetime(S.meta.github.last_push_at) : 'nenhum'}</div>
+           <button class="btn" data-act="gh-push">${ic('up')} Enviar backup ao GitHub</button>
+           <button class="btn secondary" data-act="page" data-tab="mais" data-page="github">Baixar do GitHub / configurações</button>`
+        : `<button class="btn secondary" data-act="page" data-tab="mais" data-page="github">${ic('db')} Conectar ao GitHub</button>
+           <p class="help" style="margin-top:10px">Guarda o backup num repositório privado seu, com histórico de versões e criptografia opcional.</p>`}</div>
       <div class="section-title"><span>Importar</span></div>
       <div class="card">
         <button class="btn" data-act="import">${ic('up')} Importar backup do ChatGPT</button>
@@ -3371,9 +3750,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       </div>
       <div class="card"><div class="lbl">Esconder valores</div><p class="small">Embaça os valores na tela (útil em público). Toque no olho na tela Início.</p><button class="btn secondary" data-act="toggle-hide">${S.meta.hide_values ? 'Mostrar valores' : 'Esconder valores'}</button></div>
       <div class="card"><div class="lbl">Privacidade</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
-        <li>Nenhum dado financeiro é enviado para servidor, ChatGPT ou terceiros. Só sai do aparelho quando <b>você</b> exporta.</li>
+        <li>Nenhum dado financeiro sai do aparelho sem você pedir: só quando você exporta, envia ao GitHub ou liga a <b>Sincronização</b>. Na sincronização, tudo sai <b>embaralhado</b>: o servidor não consegue ler, nem o dono do app.</li>
         <li>Sem telemetria, sem anúncios, sem rastreamento.</li>
-        <li>A internet só é usada para baixar o próprio app na primeira vez (e atualizações).</li>
+        <li>A internet só é usada para baixar o app (e atualizações) e, se você ativar, para o backup no GitHub e para a sincronização (servidor Supabase).</li>
         <li>Backup criptografado usa AES-GCM 256 com senha (PBKDF2, 600 mil iterações). Senha perdida = backup irrecuperável.</li></ul></div>
       <div class="card"><div class="lbl" style="color:var(--danger)">Zona de perigo</div><p class="small">Apaga todos os dados, cópias automáticas e comprovantes deste aparelho. Exporte um backup antes.</p><button class="btn danger" data-act="wipe">${ic('trash')} Apagar tudo deste aparelho</button></div>`;
   }
@@ -3412,6 +3791,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${b.unknown ? `<div class="notice warn">${ic('alert')}<div class="ntext">O saldo desta conta não foi informado. O app não estima valores: ela fica fora dos totais até receber um saldo de corte no backup.</div></div>` : ''}
         ${b.protected ? `<div class="notice info">${ic('lock')}<div class="ntext">Conta protegida: não entra no “disponível em conta”. Usar só com autorização.</div></div>` : ''}
         <div class="section-title"><span>Lançamentos</span></div><div class="card">${txs.length ? '<div class="rows">' + txs.map(txRow).join('') + '</div>' : '<div class="muted small">Nenhum lançamento depois do corte.</div>'}</div>
+        <button class="btn secondary" data-act="acc-edit" data-id="${esc(id)}">Editar conta (banco, moeda, saldo)</button>
         <details class="card fold"><summary>Dados brutos da conta</summary><div style="margin-top:8px">${renderValue(acc)}</div></details>`
     });
     sh.body.addEventListener('click', e => { const r = e.target.closest('[data-act="tx-edit"]'); if (r) { sh.close(); } });
@@ -3459,8 +3839,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   async function startImport() {
     const file = await pickFile();
     if (!file) return;
+    let buf;
+    try { buf = new Uint8Array(await file.arrayBuffer()); }
+    catch (e) { showError('Não foi possível ler o arquivo', esc('Erro inesperado: ' + (e && e.message))); return; }
+    await importFromBytes(buf, file);
+  }
+  /* Lê um backup (JSON, ZIP ou criptografado) e abre a prévia. `file` só precisa ter `name`. */
+  async function importFromBytes(buf, file) {
     try {
-      const buf = new Uint8Array(await file.arrayBuffer());
       let text, zipFiles = [];
       if (Zip.isZip(buf)) {
         const entries = await Zip.readZip(buf);
@@ -3631,7 +4017,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       title: 'Conferência pós-importação', full: true,
       body: `<div class="notice ok">${ic('check')}<div class="ntext"><b>Importação concluída.</b> ${esc(desc)}.</div></div>
         <div class="card"><div class="lbl">Confira com os apps dos bancos</div><div class="rows">${after.balances.map(b => `<div class="row-item"><div class="main"><div class="t">${esc(b.name)}</div><div class="s">${b.unknown ? 'saldo desconhecido' : 'corte ' + esc(money(b.snapshot, b.currency)) + (b.txCount ? ' + ' + b.txCount + ' lançamento(s)' : '')}</div></div><div class="amt">${b.balance === null ? '—' : M(b.balance, b.currency)}</div></div>`).join('')}</div></div>
-        <div class="card"><dl class="kv">${row('Disponível em conta', before && before.cashBRL, after.cashBRL)}${row('Reserva protegida', before && before.protectedBRL, after.protectedBRL)}${row('Euros (Espanha)', before && before.eur, after.eur, 'EUR')}${row('A pagar pendente', before && before.openPending, after.openPending)}${row('A pagar planejado', before && before.openPlanned, after.openPlanned)}</dl></div>
+        <div class="card"><dl class="kv">${row('Disponível em conta', before && before.freeMain, after.freeMain, after.mainCurrency)}${row('Reservas', before && before.protectedMain, after.protectedMain, after.mainCurrency)}${row('Patrimônio total', before && before.totalMain, after.totalMain, after.mainCurrency)}${row('A pagar pendente', before && before.openPending, after.openPending)}${row('A pagar planejado', before && before.openPlanned, after.openPlanned)}</dl></div>
         <div class="notice warn">${ic('alert')}<div class="ntext"><b>Próximo passo:</b> exporte um backup agora e guarde em dois lugares. ${S.ds && (S.ds.audit_log || []).length ? '' : ''}</div></div>`,
       footHtml: `<button class="btn" data-exp>${ic('down')} Exportar backup agora</button><button class="btn secondary" data-close>Depois</button>`
     });
@@ -3694,6 +4080,586 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!srcDs) { await saveMeta({ last_export_at: nowIso(), last_export_name: name, dirty: false, export_base: C.makeBase(ds), base_source: 'exportação' }); render(); }
       toast(srcDs ? 'Cópia exportada' : 'Backup exportado. Guarde em dois lugares.');
     });
+  }
+
+  // ---------- SINCRONIZAÇÃO (Supabase + criptografia de ponta a ponta) ----------
+  // O servidor só recebe dados embaralhados neste aparelho (módulos Sigilo e Sync).
+  const NUVEM = { url: 'https://rahpgtuaxbxdtjjohubi.supabase.co', key: 'sb_publishable_cr2fcV_wC58GLFAgdO_ijg_hccormKO' };
+  const nErr = (msg, extra) => Object.assign(new Error(msg), { friendly: true }, extra || {});
+  let SY = null; // { state, keys } — state vai para o IndexedDB; keys são CryptoKeys não exportáveis
+  async function syLoad() {
+    if (!SY) { let st = null, keys = null; try { st = (await DB.get('sync')) || null; keys = (await DB.get('sync_keys')) || null; } catch (e) { /* sem armazenamento */ } SY = { state: st, keys }; }
+    return SY;
+  }
+  const syReady = () => !!(SY && SY.state && SY.state.vault_id && SY.keys && SY.state.session);
+  async function sySave() { await DB.set('sync', SY.state); }
+  async function syForget() {
+    await syLoad();
+    const tok = SY.state && SY.state.session && SY.state.session.access_token;
+    if (tok) nFetch('/auth/v1/logout', { method: 'POST', auth: tok, body: {} }).catch(() => {});
+    SY = { state: null, keys: null };
+    await DB.set('sync', null); await DB.set('sync_keys', null);
+  }
+  function nuvemErro(status, code, msg) {
+    if (code === 'invalid_credentials' || code === 'invalid_grant') return 'E-mail ou senha incorretos.';
+    if (code === 'email_not_confirmed') return 'Confirme seu e-mail primeiro: abra o link que chegou no seu e-mail e depois toque em Entrar.';
+    if (code === 'user_already_exists' || code === 'email_exists' || /already registered/i.test(msg)) return 'Já existe conta com este e-mail. Use Entrar.';
+    if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit' || status === 429) return 'Muitas tentativas seguidas. Espere alguns minutos e tente de novo.';
+    if (code === 'weak_password') return 'O servidor achou a senha fraca. Use uma frase mais longa.';
+    if (status === 401) return 'Sua sessão expirou. Entre de novo.';
+    if (status === 403 || code === '42501') return 'O servidor recusou: sem permissão para este cofre.';
+    return 'Erro do servidor (' + status + ')' + (msg ? ': ' + msg : '') + '.';
+  }
+  async function nFetch(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({ apikey: NUVEM.key }, opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}, opts.headers || {});
+    if (opts.auth) headers.Authorization = 'Bearer ' + opts.auth;
+    let r;
+    try { r = await fetch(NUVEM.url + path, { method: opts.method || 'GET', headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined, cache: 'no-store', credentials: 'omit' }); }
+    catch (e) { throw nErr('Sem conexão com o servidor. Seus dados continuam salvos neste aparelho e a sincronização tenta de novo depois.', { offline: true }); }
+    const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = null; }
+    if (!r.ok) {
+      const code = j && (j.error_code || j.code || j.error), msg = (j && (j.msg || j.message || j.error_description)) || '';
+      throw nErr(nuvemErro(r.status, code, msg), { status: r.status, code });
+    }
+    return j;
+  }
+  const sessOf = j => ({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600) });
+  async function nToken() {
+    const st = SY.state;
+    if (!st || !st.session) throw nErr('Entre na sua conta para sincronizar.', { status: 401 });
+    if (Date.now() > (st.session.expires_at - 60) * 1000) {
+      try { st.session = sessOf(await nFetch('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: { refresh_token: st.session.refresh_token } })); await sySave(); }
+      catch (e) { if (!e.offline) { st.session = null; await sySave(); throw nErr('Sua sessão expirou. Entre de novo para voltar a sincronizar.', { status: 401 }); } throw e; }
+    }
+    return st.session.access_token;
+  }
+  const rest = async (path, opts) => nFetch('/rest/v1/' + path, Object.assign({}, opts, { auth: await nToken() }));
+
+  // Mostra a chave de recuperação e confere se a pessoa anotou (digitando 2 grupos sorteados).
+  function showRecoveryCode(code) {
+    return new Promise(resolve => {
+      const groups = code.split('-'), a = 1 + Math.floor(Math.random() * 6), b = 7 + Math.floor(Math.random() * 6);
+      let done = false;
+      const sh = openSheet({
+        title: 'Sua chave de recuperação', sticky: true,
+        body: `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Anote agora, em papel ou num gerenciador de senhas.</b> Se você esquecer a senha, só esta chave devolve o acesso aos dados. Ninguém, nem o suporte, consegue recuperá-la. Ela aparece só esta vez.</div></div>
+          <div class="card" style="font-family:ui-monospace,Menlo,monospace;font-size:17px;line-height:1.7;letter-spacing:.5px;word-spacing:6px;text-align:center;user-select:all">${groups.map((g, i) => `<span style="white-space:nowrap"><span class="tiny muted">${i + 1}</span>&nbsp;${esc(g)}</span>`).join(' ')}</div>
+          <div class="two"><div class="field"><label for="rc-a">Digite o grupo ${a}</label><input class="input" id="rc-a" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
+          <div class="field"><label for="rc-b">Digite o grupo ${b}</label><input class="input" id="rc-b" autocomplete="off" autocapitalize="characters" spellcheck="false"></div></div>
+          <div id="rc-err" class="small" style="color:var(--danger)"></div>`,
+        footHtml: `<button class="btn" data-ok>Anotei, continuar</button>`,
+        onClose: () => { if (!done) resolve(false); }
+      });
+      sh.foot.querySelector('[data-ok]').onclick = () => {
+        const n = v => v.trim().toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1');
+        if (n(sh.body.querySelector('#rc-a').value) !== groups[a - 1] || n(sh.body.querySelector('#rc-b').value) !== groups[b - 1]) { sh.body.querySelector('#rc-err').textContent = 'Os grupos não conferem. Olhe de novo a chave anotada.'; return; }
+        done = true; sh.close(); resolve(true);
+      };
+    });
+  }
+
+  // Login ou cadastro. A senha nunca sai do aparelho: vai só a "prova" derivada dela.
+  async function syConnect(mode, email, password) {
+    await syLoad();
+    email = String(email).trim().toLowerCase();
+    toast('Protegendo a senha… (alguns segundos)', null, null, 60000);
+    const pw = await Sigilo.fromPassword(email, password);
+    let j;
+    if (mode === 'signup') {
+      j = await nFetch('/auth/v1/signup', { method: 'POST', body: { email, password: pw.authSecret } });
+      if (!j || !j.access_token) return { needsConfirm: true, email };
+    } else j = await nFetch('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password: pw.authSecret } });
+    const uid = j.user.id;
+    SY.state = { user: { id: uid, email }, session: sessOf(j), vault_id: null, cursor: 0, base: {}, conflicts: [], last_sync_at: null };
+    SY.keys = null;
+    await sySave();
+    let uk = (await rest('user_keys?select=*'))[0];
+    if (!uk) {
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      const keys = await Sigilo.newUserKeys(), pub = await Sigilo.publicKeys(keys), code = Sigilo.newRecoveryCode();
+      if (!(await showRecoveryCode(code))) { await syForget(); throw nErr('Cadastro cancelado antes de anotar a chave de recuperação. Nada foi enviado. Entre de novo para continuar.'); }
+      toast('Criando suas chaves…', null, null, 60000);
+      await rest('profiles', { method: 'POST', body: Object.assign({ user_id: uid }, pub), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      await rest('user_keys', { method: 'POST', body: { user_id: uid, wrapped_private_keys: await Sigilo.lockPrivate(keys, pw.kek), recovery_wrapped_private_keys: await Sigilo.lockPrivate(keys, await Sigilo.recoveryKek(code)), kdf: pw.kdf }, headers: { Prefer: 'return=minimal' } });
+      uk = (await rest('user_keys?select=*'))[0];
+    }
+    const priv = await Sigilo.unlockPrivate(uk.wrapped_private_keys, pw.kek);
+    let mem = await rest('vault_members?select=vault_id,role,wrapped_vault_key,key_version&user_id=eq.' + uid);
+    let created = false;
+    if (!mem.length) {
+      const v = (await rest('vaults', { method: 'POST', body: { owner_id: uid }, headers: { Prefer: 'return=representation' } }))[0];
+      const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
+      const wrapped = await Sigilo.lockForMember(Sigilo.newVaultSecret(), me.enc_public_key, v.id);
+      await rest('vault_members', { method: 'POST', body: { vault_id: v.id, user_id: uid, role: 'owner', wrapped_vault_key: wrapped, key_version: 1, added_by: uid }, headers: { Prefer: 'return=minimal' } });
+      mem = [{ vault_id: v.id, role: 'owner', wrapped_vault_key: wrapped, key_version: 1 }]; created = true;
+    }
+    const m = mem.find(x => x.role === 'owner') || mem[0];
+    const vk = await Sigilo.vaultKeys(await Sigilo.unlockVaultSecret(m.wrapped_vault_key, priv.encPrivate, m.vault_id));
+    SY.keys = { encPrivate: priv.encPrivate, signPrivate: priv.signPrivate, data: vk.data, rid: vk.rid };
+    Object.assign(SY.state, { vault_id: m.vault_id, role: m.role, key_version: m.key_version, wrapped_vault_key: m.wrapped_vault_key, connected_at: nowIso() });
+    await DB.set('sync_keys', SY.keys); await sySave();
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    return { created };
+  }
+
+  // Baixa, junta e envia. Sem conexão: tenta de novo depois, sem perder nada.
+  let syRunning = null, syTimer = null;
+  function syLater(ms) { clearTimeout(syTimer); syTimer = setTimeout(() => { syRun(false); }, ms || 2500); }
+  function syRun(manual) {
+    if (syRunning) return syRunning;
+    syRunning = (async () => {
+      await syLoad();
+      if (!syReady()) { if (manual) go('mais', 'sync'); return; }
+      const st = SY.state, V = st.vault_id, kv = st.key_version || 1;
+      if (manual) toast('Sincronizando…', null, null, 60000);
+      try {
+        const signOf = {};
+        (await rest('profiles?select=user_id,sign_public_key')).forEach(p => { signOf[p.user_id] = p.sign_public_key; });
+        // 1) baixar o que mudou desde a última vez
+        const remote = []; let cursor = st.cursor || 0, bad = 0;
+        for (;;) {
+          const rows = await rest(`records?select=rid,ciphertext,iv,key_version,sig,deleted,rev,updated_by&vault_id=eq.${V}&rev=gt.${cursor}&order=rev.asc&limit=500`);
+          for (const r of rows) {
+            cursor = Math.max(cursor, r.rev);
+            const ok = signOf[r.updated_by] && await Sigilo.verifyRecord(signOf[r.updated_by], V, r.rid, r.key_version, r.iv, r.ciphertext, r.deleted, r.sig);
+            if (!ok) { bad++; continue; }
+            let payload; try { payload = await Sigilo.openRecord(SY.keys.data, V, r.rid, r.key_version, r); } catch (e) { bad++; continue; }
+            if (!payload || !payload.key || await Sigilo.rid(SY.keys.rid, payload.key) !== r.rid || !!payload.deleted !== !!r.deleted) { bad++; continue; }
+            remote.push({ payload, hash: payload.deleted ? undefined : await Sync.hashOf(payload) });
+          }
+          if (rows.length < 500) break;
+        }
+        // 2) juntar com o que está neste aparelho
+        const cur = S.ds;
+        const m = await Sync.merge(cur || {}, st.base || {}, remote);
+        // 3) enviar o que mudou aqui (quem é "só vê" não envia)
+        if (S.ds !== cur) { syLater(1500); return; } // você editou durante a sincronização: refaz em seguida
+        const p = st.role === 'viewer' ? { ups: [], dels: [] } : await Sync.plan(m.ds, m.base);
+        const rows = [];
+        for (const u of p.ups.concat(p.dels)) {
+          const r = await Sigilo.rid(SY.keys.rid, u.payload.key), del = !!u.payload.deleted;
+          const box = await Sigilo.sealRecord(SY.keys.data, V, r, kv, u.payload);
+          rows.push({ vault_id: V, rid: r, iv: box.iv, ciphertext: box.ciphertext, key_version: kv, deleted: del, sig: await Sigilo.signRecord(SY.keys.signPrivate, V, r, kv, box.iv, box.ciphertext, del) });
+        }
+        for (let i = 0; i < rows.length; i += 200) await rest('records?on_conflict=vault_id,rid', { method: 'POST', body: rows.slice(i, i + 200), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+        for (const u of p.ups) m.base[u.payload.key] = u.hash;
+        for (const d of p.dels) delete m.base[d.payload.key];
+        // 4) gravar neste aparelho o que veio de fora
+        if (m.applied) {
+          let fin = m.ds;
+          if (S.ds !== cur) { fin = C.clone(S.ds || {}); m.appliedList.forEach(x => Sync.apply(fin, x)); }
+          const backup = cur && (m.deletions || m.applied >= 10) ? makeBackup(cur, 'Antes de aplicar a sincronização') : null;
+          await DB.saveWithBackup(backup, fin, S.meta);
+          S.ds = fin;
+        }
+        Object.assign(st, { base: m.base, cursor, last_sync_at: nowIso(), last_error: null, bad_records: bad, last_sent: rows.length, last_received: m.applied });
+        if (m.conflicts.length) st.conflicts = (st.conflicts || []).concat(m.conflicts).slice(-50);
+        await sySave();
+        if (m.applied || S.page === 'sync') render();
+        if (manual) { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(`Sincronizado · ${m.applied} recebido(s), ${rows.length} enviado(s)`); }
+        else if (m.applied) toast(`${m.applied} alteração(ões) recebida(s) de outro aparelho`);
+      } catch (e) {
+        st.last_error = e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message);
+        try { await sySave(); } catch (e2) { /* ignora */ }
+        if (manual) { document.querySelectorAll('.toast').forEach(t => t.remove()); showError('Sincronização', esc(st.last_error)); }
+        if (S.page === 'sync') render();
+      }
+    })().finally(() => { syRunning = null; });
+    return syRunning;
+  }
+
+  function pageSync() {
+    const st = SY && SY.state;
+    let h = backBar('Mais', 'mais') + `<h1 class="page-title">Sincronização <span class="badge">beta</span></h1>`;
+    if (!syReady()) {
+      const sign = S.syMode === 'signup';
+      if (st && st.user && !st.session) h += `<div class="notice warn">${ic('alert')}<div class="ntext">A sessão de <b>${esc(st.user.email)}</b> expirou. Entre de novo para voltar a sincronizar.</div></div>`;
+      h += `<p class="small muted">Mantém seus dados iguais no celular e no computador. Tudo é <b>embaralhado neste aparelho</b> antes de sair: o servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</p>
+        <div class="card">
+          <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc((st && st.user && st.user.email) || S.syEmail || '')}"></div>
+          <div class="field"><label for="sy-pw">Senha</label><input class="input" id="sy-pw" type="password" autocomplete="${sign ? 'new-password' : 'current-password'}"></div>
+          ${sign ? `<div class="field"><label for="sy-pw2">Repita a senha</label><input class="input" id="sy-pw2" type="password" autocomplete="new-password"></div><p class="help">Mínimo de 10 caracteres. Uma frase que você não esqueça é melhor que uma senha curta e complicada.</p>` : ''}
+          <div id="sy-err" class="small" style="color:var(--danger)"></div>
+          <button class="btn" data-act="sy-go">${sign ? 'Criar conta' : 'Entrar'}</button>
+          <button class="btn ghost" data-act="sy-mode">${sign ? 'Já tenho conta: entrar' : 'Ainda não tenho conta: criar'}</button>
+        </div>
+        <div class="notice info">${ic('info')}<div class="ntext"><b>Sem volta se perder a senha e a chave de recuperação.</b> No cadastro, o app mostra uma chave de recuperação para você anotar. Como nem o servidor consegue ler seus dados, não existe "esqueci a senha" sem essa chave. Por enquanto, a recuperação pela chave ainda não tem tela no app: guarde também um backup exportado.</div></div>`;
+      return h;
+    }
+    const conf = st.conflicts || [];
+    h += `<div class="card"><div class="lbl">Conectado</div><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div>
+        <div class="small muted">${st.role === 'owner' ? 'Dono do cofre' : st.role === 'editor' ? 'Pode editar' : 'Só vê'} · criptografia de ponta a ponta</div>
+        <div class="small" style="margin-top:8px">Última sincronização: <b>${st.last_sync_at ? fdatetime(st.last_sync_at) : 'ainda não'}</b>${st.last_sync_at ? ` · ${st.last_received || 0} recebido(s), ${st.last_sent || 0} enviado(s)` : ''}</div>
+        ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
+        ${st.bad_records ? `<div class="notice danger" style="margin:12px 0 0">${ic('alert')}<div class="ntext"><b>${st.bad_records} registro(s) recusado(s)</b>: assinatura ou conteúdo não confere. Eles não foram aplicados. Se isso se repetir, avise: pode ser falha ou adulteração no servidor.</div></div>` : ''}
+        <button class="btn" data-act="sy-now" style="margin-top:12px">${ic('db')} Sincronizar agora</button></div>`;
+    if (conf.length) h += `<div class="section-title"><span>Conflitos (${conf.length})</span></div><div class="card"><p class="small muted" style="margin-top:0">O mesmo item foi alterado aqui e em outro aparelho. Ficou a versão <b>deste aparelho</b>; a outra está guardada abaixo para consulta.</p>${conf.slice().reverse().map(c => `<details class="fold" style="margin-top:8px"><summary class="small">${esc(conflictLabel(c))} · ${fdatetime(c.at)}</summary><div style="margin-top:8px">${renderValue(c.remote.item !== undefined ? c.remote.item : c.remote.value)}</div></details>`).join('')}<button class="btn ghost" data-act="sy-clear-conf">Limpar lista de conflitos</button></div>`;
+    h += `<div class="card"><div class="lbl">Como funciona</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
+        <li>Sincroniza sozinho ao abrir o app, ao voltar para ele e alguns segundos depois de cada alteração.</li>
+        <li>Sem internet, tudo continua funcionando; envia quando a conexão voltar.</li>
+        <li>Comprovantes (imagens) não sincronizam, só a lista deles.</li>
+        <li>Convidar outra pessoa (ex.: esposa) chega na próxima etapa.</li></ul></div>
+      <button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Sair da conta neste aparelho</button>
+      <p class="help">Sair não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
+    return h;
+  }
+  function conflictLabel(c) {
+    const r = c.remote || {}, k = r.c || r.k || c.key.replace(/^[@#]/, '').split(':')[0];
+    const it = r.item || {};
+    return (COLL_LABEL[k] || humanize(k)) + (r.item ? ' · ' + (it.name || it.description || humanize(C.idOf(it) || '')) : '');
+  }
+  async function syGo() {
+    const v = id => (document.getElementById(id) || {}).value || '';
+    const err = m => { const el = document.getElementById('sy-err'); if (el) el.textContent = m; };
+    const email = v('sy-email').trim(), pw = v('sy-pw'), sign = S.syMode === 'signup';
+    S.syEmail = email;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Confira o e-mail.');
+    if (pw.length < 10) return err('A senha precisa ter pelo menos 10 caracteres.');
+    if (sign && pw !== v('sy-pw2')) return err('As senhas não são iguais.');
+    try {
+      const r = await syConnect(sign ? 'signup' : 'login', email, pw);
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      if (r.needsConfirm) {
+        S.syMode = 'login'; render();
+        openSheet({ title: 'Confirme seu e-mail', body: `<p>Enviamos um link para <b>${esc(r.email)}</b>. Abra o e-mail, toque no link e depois volte aqui e toque em <b>Entrar</b> com a mesma senha.</p><p class="small muted">Não chegou? Veja a caixa de spam. O link pode abrir uma página de erro: isso é normal por enquanto, a confirmação vale mesmo assim.</p>`, footHtml: '<button class="btn" data-close>Entendi</button>' });
+        return;
+      }
+      // Este aparelho já tinha dados e o cofre já existia: juntar ou usar só os da nuvem?
+      if (!r.created && S.ds && Object.keys(S.ds).length) {
+        const keep = await confirmDialog({ title: 'Este aparelho já tem dados', text: 'Sua conta já tem dados na nuvem. <b>Juntar</b> mantém os dois (itens iguais não duplicam; se o mesmo item for diferente, fica o deste aparelho e o outro vai para "Conflitos").<br><br><b>Usar só os da nuvem</b> troca os dados deste aparelho pelos da nuvem (uma cópia automática dos atuais é guardada antes).', ok: 'Juntar', cancel: 'Usar só os da nuvem' });
+        if (!keep) { await DB.saveWithBackup(makeBackup(S.ds, 'Antes de trocar pelos dados da nuvem'), null, S.meta); S.ds = null; }
+      }
+      render();
+      await syRun(true);
+    } catch (e) {
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      err(e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message));
+    }
+  }
+
+  // ---------- MOEDAS, CÂMBIO E CADASTRO DE CONTAS ----------
+  const COMMON_CURRENCIES = ['BRL', 'USD', 'EUR', 'GBP', 'ARS', 'CLP', 'UYU', 'PYG', 'COP', 'PEN', 'MXN', 'CAD', 'AUD', 'CHF', 'JPY', 'CNY'];
+  const BANKS = ['Nubank', 'Itaú', 'Bradesco', 'Banco do Brasil', 'Caixa', 'Santander', 'Inter', 'C6 Bank', 'BTG Pactual', 'XP', 'Mercado Pago', 'PicPay', 'PagBank', 'Sicoob', 'Sicredi', 'Banrisul', 'Neon', 'Safra', 'InfinitePay', 'Revolut', 'Wise', 'Nomad', 'Avenue', 'N26'];
+  function currencyOptions(selected) {
+    let all = [];
+    try { all = Intl.supportedValuesOf('currency'); } catch (e) { all = []; }
+    const rest = all.filter(c => !COMMON_CURRENCIES.includes(c));
+    const opt = c => `<option value="${c}" ${c === selected ? 'selected' : ''}>${c} · ${esc(curName(c))}</option>`;
+    return `<optgroup label="Mais usadas">${COMMON_CURRENCIES.map(opt).join('')}</optgroup>` + (rest.length ? `<optgroup label="Todas">${rest.map(opt).join('')}</optgroup>` : '');
+  }
+  // Moedas que aparecem nos dados (contas, lançamentos, contas a pagar), exceto a principal.
+  function currenciesInUse(ds) {
+    const set = new Set();
+    (ds.accounts || []).forEach(a => a && a.currency && set.add(String(a.currency).toUpperCase()));
+    (ds.transactions || []).forEach(t => t && t.currency && set.add(String(t.currency).toUpperCase()));
+    (ds.obligations || []).forEach(o => o && set.add(C.currencyOf(o, ds)));
+    const rates = (ds.settings && ds.settings.exchange_rates) || {};
+    Object.keys(rates).forEach(c => set.add(c));
+    set.delete(C.mainCurrency(ds));
+    return Array.from(set).sort();
+  }
+  function pageMoedas() {
+    const ds = S.ds, MC = C.mainCurrency(ds), rates = (ds.settings && ds.settings.exchange_rates) || {};
+    const used = currenciesInUse(ds);
+    let h = backBar('Mais', 'mais') + `<h1 class="page-title">Moedas e câmbio</h1>
+      <div class="card"><div class="lbl">Moeda principal</div>
+        <div style="font-size:20px;font-weight:700;margin:2px 0 4px">${esc(MC)} · ${esc(curName(MC))}</div>
+        <p class="small muted" style="margin:0 0 10px">O patrimônio total e os resumos aparecem nesta moeda. Contas em outras moedas são convertidas pela cotação abaixo.</p>
+        <button class="btn secondary" data-act="cur-main">Trocar moeda principal</button></div>
+      <div class="section-title"><span>Cotações</span></div>`;
+    if (!used.length) h += `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
+    else {
+      h += `<div class="card">` + used.map(c => {
+        const r = rates[c]; const v = C.num(r && typeof r === 'object' ? r.rate : r);
+        return `<div class="field"><label for="rate-${c}">1 ${esc(c)} (${esc(curName(c))}) vale quantos ${esc(MC)}?</label>
+          <input class="input num" id="rate-${c}" data-rate="${c}" inputmode="decimal" placeholder="ex.: 6,20" value="${v > 0 ? esc(String(v).replace('.', ',')) : ''}">
+          <p class="help">${v > 0 ? 'Atualizada em ' + (r && r.updated_at ? fdatetime(r.updated_at) : 'data desconhecida') : '<b style="color:var(--warn)">Sem cotação:</b> esta moeda fica fora do patrimônio total.'}</p></div>`;
+      }).join('') + `<button class="btn" data-act="rates-save">${ic('check')} Salvar cotações</button>
+        <p class="help" style="margin-top:10px">O app não busca cotação na internet: você digita. Use a do seu banco ou corretora (é a que vale para você). Deixe em branco para tirar a moeda do total.</p></div>`;
+    }
+    return h;
+  }
+  async function saveRates() {
+    const ds2 = C.clone(S.ds), now = nowIso();
+    ds2.settings = Object.assign({}, ds2.settings || {});
+    const rates = Object.assign({}, ds2.settings.exchange_rates || {});
+    const changed = [];
+    for (const inp of document.querySelectorAll('[data-rate]')) {
+      const c = inp.dataset.rate, raw = inp.value.trim();
+      const old = rates[c] && typeof rates[c] === 'object' ? C.num(rates[c].rate) : C.num(rates[c]);
+      if (!raw) { if (rates[c] !== undefined) { delete rates[c]; changed.push(c + ' removida'); } continue; }
+      const v = C.num(raw);
+      if (!(v > 0)) { showError('Cotação inválida', `Confira o valor de <b>${esc(c)}</b>. Use número maior que zero, ex.: 6,20.`); return; }
+      if (v !== old) { rates[c] = { rate: v, updated_at: now }; changed.push(`1 ${c} = ${String(v).replace('.', ',')} ${C.mainCurrency(ds2)}`); }
+    }
+    if (!changed.length) { toast('Nenhuma cotação mudou'); return; }
+    ds2.settings.exchange_rates = rates;
+    await commit(ds2, { audit: { type: 'exchange-rates', description: 'Cotações: ' + changed.join('; ') }, toast: 'Cotações salvas' });
+  }
+  function changeMainCurrency() {
+    const MC = C.mainCurrency(S.ds);
+    const sh = openSheet({
+      title: 'Moeda principal',
+      body: `<div class="field"><label for="mc-sel">Mostrar totais em</label><select class="input" id="mc-sel">${currencyOptions(MC)}</select></div>
+        <div class="notice warn">${ic('alert')}<div class="ntext">As cotações são relativas à moeda principal. Ao trocar, <b>todas as cotações são apagadas</b> e você digita de novo. Saldos e lançamentos não mudam.</div></div>`,
+      footHtml: `<button class="btn" data-ok>Trocar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const v = sh.body.querySelector('#mc-sel').value;
+      sh.close();
+      if (v === MC) return;
+      const ds2 = C.clone(S.ds);
+      ds2.settings = Object.assign({}, ds2.settings || {}, { main_currency: v, exchange_rates: {} });
+      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações zeradas)` }, toast: 'Moeda principal: ' + v });
+    };
+  }
+
+  function accountRefs(ds, id) {
+    return (ds.transactions || []).filter(t => t && (t.account_id === id || t.to_account_id === id)).length;
+  }
+  function openAccountForm(id) {
+    const ds = S.ds, acc = id ? (ds.accounts || []).find(a => a && a.id === id) : null;
+    if (id && !acc) return;
+    const refs = acc ? accountRefs(ds, id) : 0;
+    const cur = acc ? String(acc.currency || C.mainCurrency(ds)).toUpperCase() : C.mainCurrency(ds);
+    const snap = acc && acc.snapshot_balance != null ? C.num(acc.snapshot_balance) : null;
+    const isRes = acc ? /protegid|espanha|reserva/.test(C.norm(acc.status)) : false;
+    const sh = openSheet({
+      title: acc ? 'Editar conta' : 'Nova conta',
+      body: `<div class="field"><label for="a-bank">Banco ou instituição</label><input class="input" id="a-bank" list="a-banks" autocomplete="off" placeholder="ex.: Nubank" value="${esc(acc ? (acc.institution || acc.name || '') : '')}"><datalist id="a-banks">${BANKS.map(b => `<option value="${esc(b)}">`).join('')}</datalist></div>
+        <div class="field"><label for="a-name">Apelido (opcional)</label><input class="input" id="a-name" autocomplete="off" placeholder="ex.: Conta salário, Reserva viagem" value="${esc(acc && acc.institution && acc.name !== acc.institution ? acc.name : '')}"></div>
+        <div class="field"><label for="a-cur">Moeda da conta</label><select class="input" id="a-cur" ${refs ? 'disabled' : ''}>${currencyOptions(cur)}</select>
+          ${refs ? `<p class="help">Não dá para trocar a moeda: a conta já tem ${refs} lançamento(s) nessa moeda.</p>` : ''}</div>
+        <div class="two"><div class="field"><label for="a-bal">Saldo</label><input class="input num" id="a-bal" inputmode="decimal" placeholder="0,00" value="${snap === null || isNaN(snap) ? '' : esc(String(snap).replace('.', ','))}"></div>
+          <div class="field"><label for="a-date">Saldo do dia</label><input class="input" id="a-date" type="date" value="${esc(acc ? (C.dateOnly(acc.snapshot_date) || C.dateOnly(ds.snapshot_date) || todayStr()) : todayStr())}"></div></div>
+        <p class="help" style="margin-top:-6px">Saldo no <b>fim do dia</b> informado, como aparece no app do banco. Lançamentos confirmados <b>depois</b> dessa data são somados automaticamente.${acc ? ' Deixe vazio se não souber (a conta fica fora dos totais).' : ''}</p>
+        <label class="check"><input type="checkbox" id="a-res" ${isRes ? 'checked' : ''}><div><b>É uma reserva</b><div class="small muted">Dinheiro guardado (emergência, viagem, investimento). Entra no patrimônio, mas não no “disponível em conta”.</div></div></label>
+        <div id="a-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<button class="btn" data-ok>${acc ? 'Salvar alterações' : 'Cadastrar conta'}</button>${acc ? `<button class="btn ghost" data-del style="color:var(--danger)">Excluir conta</button>` : ''}`
+    });
+    const q = sel => sh.body.querySelector(sel);
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const bank = q('#a-bank').value.trim(), nick = q('#a-name').value.trim(), rawBal = q('#a-bal').value.trim();
+      const date = q('#a-date').value, currency = q('#a-cur').value, res = q('#a-res').checked;
+      const err = m => { q('#a-err').textContent = m; };
+      if (!bank) return err('Informe o banco ou instituição.');
+      const bal = rawBal ? C.num(rawBal) : null;
+      if (rawBal && isNaN(bal)) return err('Saldo inválido. Use números, ex.: 1.234,56 ou -50.');
+      if (!acc && bal === null) return err('Informe o saldo atual (pode ser 0).');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('Informe a data do saldo.');
+      const ds2 = C.clone(S.ds), now = nowIso();
+      if (!Array.isArray(ds2.accounts)) ds2.accounts = [];
+      let a;
+      if (acc) a = ds2.accounts.find(x => x && x.id === acc.id);
+      else {
+        const slug = C.norm(bank).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'conta';
+        a = { id: `acc-${slug}-${rand(2)}`, type: 'banco', origin: 'usuario', created_at: now };
+        ds2.accounts.push(a);
+      }
+      const prevStatus = a.status;
+      Object.assign(a, { name: nick || bank, institution: bank, snapshot_balance: bal === null ? null : C.round2(bal), snapshot_date: date, updated_at: now });
+      if (!refs) a.currency = currency;
+      a.status = res ? (/protegid|espanha|reserva/.test(C.norm(prevStatus)) ? prevStatus : 'reserva') : (/protegid|espanha|reserva/.test(C.norm(prevStatus)) || !prevStatus ? 'operacional' : prevStatus);
+      if (!ds2.snapshot_date) ds2.snapshot_date = date;
+      sh.close();
+      const desc = acc ? `Conta editada: ${a.name}` : `Conta cadastrada: ${a.name} (${a.currency})`;
+      await commit(ds2, { audit: { type: acc ? 'account-edit' : 'account-create', description: desc + (bal === null ? '' : ` · saldo ${money(a.snapshot_balance, a.currency)} em ${fdate(date)}`), extra: { record_id: a.id } }, backupReason: acc ? 'Antes de editar a conta ' + acc.name : null, toast: acc ? 'Conta atualizada' : 'Conta cadastrada' });
+      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) toast(`Informe a cotação de ${a.currency} em Mais → Moedas e câmbio`, 'Abrir', () => go('mais', 'moedas'), 6000);
+    };
+    const del = sh.foot.querySelector('[data-del]');
+    if (del) del.onclick = async () => {
+      if (refs) { sh.close(); showError('Não dá para excluir', `A conta <b>${esc(acc.name)}</b> tem ${refs} lançamento(s). Excluir faria esses lançamentos apontarem para uma conta que não existe. Se a conta não é mais usada, zere o saldo ou exclua os lançamentos antes.`); return; }
+      sh.close();
+      if (!(await confirmDialog({ title: 'Excluir conta?', text: `<b>${esc(acc.name)}</b> sai dos saldos. Fica guardada em “Registros excluídos” e no histórico.`, ok: 'Excluir', danger: true }))) return;
+      const ds2 = C.clone(S.ds), now = nowIso();
+      ds2.accounts = ds2.accounts.filter(x => !(x && x.id === acc.id));
+      if (!Array.isArray(ds2.deleted_records)) ds2.deleted_records = [];
+      ds2.deleted_records.push({ id: 'del-' + Date.now().toString(36) + rand(2), collection: 'accounts', record_id: acc.id, deleted_at: now, record: C.clone(acc) });
+      await commit(ds2, { audit: { type: 'account-delete', description: 'Conta excluída: ' + acc.name, extra: { record_id: acc.id } }, backupReason: 'Antes de excluir a conta ' + acc.name, toast: 'Conta excluída' });
+    };
+  }
+  // Primeiro uso sem backup: começa com dados vazios.
+  async function startFresh() {
+    const sh = openSheet({
+      title: 'Começar do zero',
+      body: `<p class="small">Você vai cadastrar suas contas (banco, moeda e saldo) direto no app.</p>
+        <div class="field"><label for="fr-cur">Moeda principal</label><select class="input" id="fr-cur">${currencyOptions('BRL')}</select><p class="help">Os totais aparecem nesta moeda. Dá para trocar depois.</p></div>`,
+      footHtml: `<button class="btn" data-ok>Começar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const cur = sh.body.querySelector('#fr-cur').value, today = todayStr();
+      sh.close();
+      const ds = { schema_version: C.APP_SCHEMA, source: 'cadastro no app', snapshot_date: today, currency_default: cur, settings: { main_currency: cur, exchange_rates: {} }, accounts: [], credit_facilities: [], transactions: [], obligations: [], audit_log: [], deleted_records: [] };
+      await commit(ds, { audit: { type: 'start', description: 'Início do zero, moeda principal ' + cur } });
+      go('inicio');
+      openAccountForm(null);
+    };
+  }
+
+  // ---------- BACKUP NO GITHUB ----------
+  /* Envia/baixa o backup JSON para um arquivo num repositório do GitHub (API "contents").
+     Cada envio vira um commit, então o GitHub guarda o histórico de todas as versões.
+     O token fica só em S.meta (IndexedDB deste aparelho) e nunca entra no backup exportado. */
+  const GH_API = 'https://api.github.com';
+  const GH_DEFAULT_PATH = 'cofre-backup.json';
+  const ghErr = msg => Object.assign(new Error(msg), { friendly: true });
+  function ghParseRepo(v) {
+    const m = String(v || '').trim().replace(/\.git$/i, '').replace(/\/+$/, '').match(/^(?:https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/);
+    return m ? { owner: m[1], repo: m[2] } : null;
+  }
+  function ghCleanPath(v) {
+    const p = String(v || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/{2,}/g, '/');
+    return p || GH_DEFAULT_PATH;
+  }
+  function ghContentsPath(cfg) {
+    return `/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/` + cfg.path.split('/').map(encodeURIComponent).join('/');
+  }
+  function ghErrorText(status, msg) {
+    if (status === 401) return 'O GitHub recusou o token (inválido, expirado ou revogado). Gere um novo token e salve de novo.';
+    if (status === 403) return /rate limit/i.test(msg) ? 'Limite de uso da API do GitHub atingido. Espere alguns minutos e tente de novo.' : 'O token não tem permissão para isso. Ele precisa de acesso a este repositório com <b>Contents: Read and write</b>.';
+    if (status === 404) return 'Não encontrado. Confira o nome do repositório e o branch. O GitHub também responde assim quando o token <b>não tem acesso</b> ao repositório.';
+    if (status === 409) return 'O arquivo mudou no GitHub durante o envio. Tente de novo.';
+    if (status === 422) return 'O GitHub recusou o envio' + (msg ? ': ' + esc(msg) : '') + '. Confira o branch e o caminho do arquivo.';
+    return 'Erro do GitHub (' + status + ')' + (msg ? ': ' + esc(msg) : '') + '.';
+  }
+  async function ghFetch(cfg, path, opts) {
+    opts = opts || {};
+    const headers = { Authorization: 'Bearer ' + cfg.token, Accept: opts.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    let r;
+    try { r = await fetch(GH_API + path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined, cache: 'no-store', credentials: 'omit' }); }
+    catch (e) { throw ghErr('Sem conexão com o GitHub. Verifique a internet e tente de novo.'); }
+    if (r.ok) return r;
+    if (opts.allow404 && r.status === 404) return null;
+    let msg = ''; try { msg = (await r.json()).message || ''; } catch (e) { /* sem corpo */ }
+    throw Object.assign(ghErr(ghErrorText(r.status, msg)), { status: r.status });
+  }
+  async function ghRepoInfo(cfg) {
+    const r = await ghFetch(cfg, `/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`);
+    return r.json();
+  }
+  async function ghCurrentFile(cfg) {
+    const r = await ghFetch(cfg, ghContentsPath(cfg) + (cfg.branch ? '?ref=' + encodeURIComponent(cfg.branch) : ''), { allow404: true });
+    if (!r) return null;
+    const j = await r.json();
+    if (Array.isArray(j) || j.type !== 'file') throw ghErr('O caminho <b>' + esc(cfg.path) + '</b> é uma pasta no repositório. Informe o nome de um arquivo, ex.: <b>backups/cofre.json</b>.');
+    return j;
+  }
+  function ghLabel(cfg) { return `${cfg.owner}/${cfg.repo}/${cfg.path}${cfg.branch ? ' (' + cfg.branch + ')' : ''}`; }
+  async function ghRun(label, fn) {
+    if (S.ghBusy) { toast('Aguarde: já há uma operação com o GitHub em andamento.'); return; }
+    S.ghBusy = true;
+    toast(label + '…', null, null, 60000);
+    try { await fn(); }
+    catch (e) { document.querySelectorAll('.toast').forEach(t => t.remove()); showError('GitHub', e && e.friendly ? e.message : esc('Erro inesperado: ' + (e && e.message))); }
+    finally { S.ghBusy = false; }
+  }
+
+  function ghSaveConfig() {
+    return ghRun('Testando conexão', async () => {
+      const val = id => (document.getElementById(id) || {}).value || '';
+      const rp = ghParseRepo(val('gh-repo'));
+      if (!rp) throw ghErr('Repositório inválido. Use o formato <b>usuario/repositorio</b> (ex.: <b>felippy/cofre-backup</b>).');
+      const old = S.meta.github || {};
+      const token = val('gh-token').trim() || old.token || '';
+      if (!token) throw ghErr('Cole o token de acesso do GitHub.');
+      const encEl = document.getElementById('gh-enc');
+      const cfg = { owner: rp.owner, repo: rp.repo, branch: val('gh-branch').trim(), path: ghCleanPath(val('gh-path')), token, encrypt: encEl ? encEl.checked : true };
+      const info = await ghRepoInfo(cfg);
+      if (!info.private && !cfg.encrypt) throw ghErr('Este repositório é <b>público</b>: qualquer pessoa na internet veria seus dados financeiros. Use um repositório <b>privado</b> ou ative a criptografia com senha.');
+      const cur = await ghCurrentFile(cfg);
+      await saveMeta({ github: Object.assign({}, old, cfg, { repo_private: !!info.private, default_branch: info.default_branch || null, connected_at: old.connected_at || nowIso() }) });
+      render();
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      openSheet({
+        title: 'GitHub conectado',
+        body: `<div class="notice ok">${ic('check')}<div class="ntext">Acesso ao repositório <b>${esc(cfg.owner + '/' + cfg.repo)}</b> confirmado (${info.private ? 'privado' : '<b>público</b>'}).</div></div>
+          <p class="small">${cur ? `Já existe um backup em <b>${esc(cfg.path)}</b>. Você pode baixá-lo e importar, ou enviar um novo (o anterior continua no histórico do GitHub).` : `Ainda não há arquivo em <b>${esc(cfg.path)}</b>. Ele será criado no primeiro envio.`}</p>
+          ${!info.private ? `<div class="notice warn">${ic('alert')}<div class="ntext">Repositório público: só backups <b>criptografados</b> serão enviados. Mesmo assim, prefira um privado.</div></div>` : ''}`,
+        footHtml: '<button class="btn secondary" data-close>Fechar</button>'
+      });
+    });
+  }
+  async function ghDisconnect() {
+    if (!(await confirmDialog({ title: 'Desconectar o GitHub?', text: 'O token será apagado deste aparelho. Os backups que já estão no GitHub <b>continuam lá</b>. Para invalidar o token de vez, revogue-o também em github.com → Settings → Developer settings.', ok: 'Desconectar', danger: true }))) return;
+    const m = Object.assign({}, S.meta); delete m.github; S.meta = m; await DB.set('meta', m); render(); toast('GitHub desconectado');
+  }
+  function ghPush() {
+    const cfg = S.meta.github;
+    if (!cfg || !cfg.token) { go('mais', 'github'); return; }
+    return ghRun('Enviando backup ao GitHub', async () => {
+      const ds = S.ds;
+      const info = await ghRepoInfo(cfg);
+      if (!info.private && !cfg.encrypt) throw ghErr('O repositório <b>' + esc(cfg.owner + '/' + cfg.repo) + '</b> está <b>público</b>. Envio sem criptografia bloqueado para não expor seus dados.');
+      const exportedAt = nowIso();
+      let text = JSON.stringify(await C.buildExport(ds, exportedAt, { base: S.meta.export_base, previousExportAt: S.meta.last_export_at || S.meta.last_import_file_exported_at }), null, 2);
+      if (cfg.encrypt) {
+        document.querySelectorAll('.toast').forEach(t => t.remove());
+        const pw = await promptPassword({ title: 'Senha do backup', confirm: true, text: 'O arquivo no GitHub será criptografado com esta senha. <b>Sem ela, ninguém (nem você) consegue abrir o backup.</b> Use sempre a mesma e anote num lugar seguro.' });
+        if (!pw) { toast('Envio cancelado. Nada foi enviado.'); return; }
+        toast('Criptografando…', null, null, 60000);
+        text = await C.encryptText(text, pw);
+      }
+      toast('Enviando ao GitHub…', null, null, 60000);
+      const cur = await ghCurrentFile(cfg);
+      const body = { message: `Backup Cofre ${stamp().replace('_', ' ')}${cfg.encrypt ? ' (criptografado)' : ''}`, content: C.b64.enc(new TextEncoder().encode(text)) };
+      if (cur) body.sha = cur.sha;
+      if (cfg.branch) body.branch = cfg.branch;
+      const res = await (await ghFetch(cfg, ghContentsPath(cfg), { method: 'PUT', body })).json();
+      const commitUrl = res && res.commit && res.commit.html_url;
+      await saveMeta({
+        last_export_at: exportedAt, last_export_name: 'GitHub: ' + ghLabel(cfg), dirty: false, export_base: C.makeBase(ds), base_source: 'envio ao GitHub',
+        github: Object.assign({}, cfg, { last_push_at: exportedAt, last_push_commit: commitUrl || null, last_push_encrypted: !!cfg.encrypt })
+      });
+      render();
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      toast('Backup enviado ao GitHub');
+    });
+  }
+  function ghPull() {
+    const cfg = S.meta.github;
+    if (!cfg || !cfg.token) { go('mais', 'github'); return; }
+    return ghRun('Baixando backup do GitHub', async () => {
+      const r = await ghFetch(cfg, ghContentsPath(cfg) + (cfg.branch ? '?ref=' + encodeURIComponent(cfg.branch) : ''), { accept: 'application/vnd.github.raw+json', allow404: true });
+      if (!r) throw ghErr('Ainda não há backup em <b>' + esc(ghLabel(cfg)) + '</b>. Envie um primeiro.');
+      const buf = new Uint8Array(await r.arrayBuffer());
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      await importFromBytes(buf, { name: 'GitHub ' + ghLabel(cfg), size: buf.length });
+    });
+  }
+  function pageGithub() {
+    const g = S.meta.github || {};
+    const on = !!g.token;
+    const repoUrl = on ? `https://github.com/${encodeURIComponent(g.owner)}/${encodeURIComponent(g.repo)}` : '';
+    let h = `<button class="back" data-act="page" data-tab="mais" data-page="backup">${ic('left')}Backup</button><h1 class="page-title">Backup no GitHub</h1>
+      <p class="small muted">Envia o backup para um arquivo num repositório <b>seu</b> no GitHub. Cada envio vira uma versão no histórico do repositório, então dá para recuperar qualquer backup antigo.</p>`;
+    if (on) h += `<div class="card"><div class="lbl">Conectado</div>
+        <div style="font-weight:700;word-break:break-all">${esc(g.owner + '/' + g.repo)}</div>
+        <div class="small muted" style="word-break:break-all">${esc(g.path)}${g.branch ? ' · branch ' + esc(g.branch) : ''} · ${g.repo_private === false ? '<b style="color:var(--warn)">público</b>' : 'privado'} · ${g.encrypt ? 'criptografado com senha' : 'sem criptografia'}</div>
+        <div class="small" style="margin-top:8px">Último envio: <b>${g.last_push_at ? fdatetime(g.last_push_at) : 'nenhum'}</b></div>
+        ${S.meta.dirty ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">Há alterações que ainda não foram para nenhum backup.</div></div>` : ''}
+        <button class="btn" data-act="gh-push" style="margin-top:12px">${ic('up')} Enviar backup agora</button>
+        <button class="btn secondary" data-act="gh-pull">${ic('down')} Baixar do GitHub e importar</button>
+        <p class="help" style="margin-top:10px">Baixar passa pela mesma prévia da importação: você vê o que muda e confirma antes de gravar.${repoUrl ? ` Repositório: <span style="word-break:break-all">${esc(repoUrl)}</span>` : ''}</p></div>`;
+    h += `<div class="section-title"><span>${on ? 'Alterar configuração' : 'Configurar'}</span></div>
+      <div class="card">
+        <div class="field"><label for="gh-repo">Repositório</label><input class="input" id="gh-repo" placeholder="usuario/cofre-backup" autocomplete="off" autocapitalize="none" spellcheck="false" value="${on ? esc(g.owner + '/' + g.repo) : ''}"></div>
+        <div class="field"><label for="gh-path">Arquivo no repositório</label><input class="input" id="gh-path" placeholder="${GH_DEFAULT_PATH}" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(g.path || GH_DEFAULT_PATH)}"></div>
+        <div class="field"><label for="gh-branch">Branch (opcional)</label><input class="input" id="gh-branch" placeholder="${esc(g.default_branch || 'padrão do repositório')}" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(g.branch || '')}"></div>
+        <div class="field"><label for="gh-token">Token de acesso</label><input class="input" id="gh-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${on ? '•••••••• salvo (deixe vazio para manter)' : 'github_pat_…'}"></div>
+        <label class="check"><input type="checkbox" id="gh-enc" ${g.encrypt === false ? '' : 'checked'}><div><b>Criptografar com senha</b><div class="small muted">Recomendado. O GitHub (e quem tiver acesso ao repositório) só vê dados embaralhados. A senha é pedida a cada envio e nunca é guardada.</div></div></label>
+        <button class="btn" data-act="gh-save">${ic('check')} Salvar e testar conexão</button>
+        ${on ? `<button class="btn ghost" data-act="gh-disconnect" style="color:var(--danger)">Desconectar e apagar token</button>` : ''}
+      </div>
+      <details class="card fold"${on ? '' : ' open'}><summary>Como criar o repositório e o token</summary><ol class="small" style="padding-left:18px;margin:10px 0 0;display:grid;gap:8px">
+        <li>No GitHub, crie um repositório <b>privado</b> (ex.: <b>cofre-backup</b>). Não use o repositório onde o app está publicado.</li>
+        <li>Vá em <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+        <li>Em <b>Repository access</b>, escolha <b>Only select repositories</b> e marque só o repositório de backup.</li>
+        <li>Em <b>Permissions → Repository permissions</b>, coloque <b>Contents: Read and write</b>. Nada mais.</li>
+        <li>Defina uma validade (ex.: 1 ano), gere e cole o token aqui.</li></ol></details>
+      <div class="notice info">${ic('info')}<div class="ntext"><b>O que você precisa saber:</b> o token fica guardado <b>sem criptografia</b> neste aparelho (como o resto dos dados do app) e nunca vai dentro dos backups. Por isso ele deve dar acesso <b>só</b> ao repositório de backup. Comprovantes (imagens) não vão para o GitHub, só a lista deles: para eles, use o ZIP completo.</div></div>`;
+    return h;
   }
 
   // ---------- restauração e integridade ----------
@@ -3790,6 +4756,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   async function wipe(fromLock) {
     const okd = await confirmDialog({ title: fromLock ? 'Esqueceu o PIN?' : 'Apagar tudo?', text: (fromLock ? 'Sem o PIN, a única opção é <b>apagar os dados deste aparelho</b> e depois importar seu último backup exportado.<br><br>' : '') + 'Isso apaga dados, cópias automáticas e comprovantes deste aparelho. <b>Não dá para desfazer.</b>', ok: 'Apagar tudo', danger: true, typeWord: 'APAGAR' });
     if (!okd) return false;
+    await syForget(); // senão a próxima sincronização apagaria os dados também na nuvem
     const backups = await DB.listBackups();
     for (const b of backups) await DB.deleteBackup(b.id);
     await DB.clearFiles();
@@ -4030,7 +4997,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       <div class="card">${cat.rows.length ? cat.rows.map(x => `<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:14px"><span>${catIcon(x.cat, '•')} ${esc(x.cat)}</span><b class="money">${esc(money(x.total))}</b></div><div class="progress"><div style="width:${x.total / max * 100}%"></div></div>${x.hist && x.after ? `<div class="tiny muted">resumo ${esc(money(x.hist))} + lançamentos ${esc(money(x.after))}</div>` : (x.hist ? '<div class="tiny muted">do resumo histórico</div>' : '')}</div>`).join('') : '<div class="muted small">Nenhuma despesa no período.</div>'}
       ${cat.notes.map(n => `<div class="tiny muted" style="margin-top:6px">${esc(n)}</div>`).join('')}</div>
       <div class="section-title"><span>Contas do período</span></div>
-      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(ob.paid.reduce((s, o) => s + (C.amountOf(o) || 0), 0))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(ob.open.reduce((s, o) => s + (C.amountOf(o) || 0), 0))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
+      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(C.sumObligations(ob.paid, false, ds))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(C.sumObligations(ob.open, true, ds))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
       ${Object.keys(tot.byAccount).length ? `<div class="section-title"><span>Despesas por conta</span></div><div class="card"><dl class="kv">${Object.entries(tot.byAccount).map(([k, v]) => `<dt>${esc(accountName(k))}</dt><dd>${M(C.round2(v))}</dd>`).join('')}</dl></div>` : ''}
       <button class="btn" data-act="rep-doc">${ic('down')} Gerar documento deste período</button>
       <p class="tiny muted" style="margin-top:10px">Os totais atualizam na hora a cada lançamento. Antes da data de corte (${fdate(ds.snapshot_date)}) só existem os resumos informados no backup.</p>`;
@@ -4040,13 +5007,27 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- eventos ----------
   const TABS = { inicio: viewInicio, extrato: viewExtrato, pergunte: viewPergunte, contas: viewContas, mais: viewMais };
   const PAGES = { backup: pageBackup, planejamento: pagePlanejamento, conciliacao: pageConciliacao, auditoria: pageAuditoria, dados: pageDados, seguranca: pageSeguranca, sobre: pageSobre,
-    docs: pageDocs, relatorios: pageRelatorios, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
+    docs: pageDocs, relatorios: pageRelatorios, github: pageGithub, moedas: pageMoedas, sync: pageSync, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
   const ACTIONS = {
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
     import: () => startImport(),
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
+    'gh-save': () => ghSaveConfig(),
+    'acc-new': () => openAccountForm(null),
+    'sy-go': () => syGo(),
+    'sy-mode': () => { S.syMode = S.syMode === 'signup' ? 'login' : 'signup'; render(); },
+    'sy-now': () => syRun(true),
+    'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
+    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
+    'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
+    'cur-main': () => changeMainCurrency(),
+    'rates-save': () => saveRates(),
+    'fresh': () => startFresh(),
+    'gh-push': () => ghPush(),
+    'gh-pull': () => ghPull(),
+    'gh-disconnect': () => ghDisconnect(),
     'tx-new': () => openTxForm(null),
     'tx-edit': el => openTxDetail(el.dataset.id),
     card: el => openCard(el.dataset.id),
@@ -4100,10 +5081,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (e.target && e.target.id === 'ext-search') { S.ext.text = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { const r = document.getElementById('ext-results'); if (r) r.innerHTML = renderExtResults(); }, 150); }
   });
   document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && syReady() && (!SY.state.last_sync_at || Date.now() - Date.parse(SY.state.last_sync_at) > 30000)) syRun(false);
     if (document.hidden) S.hiddenAt = Date.now();
     else if (S.meta.pin && S.ds && S.hiddenAt && Date.now() - S.hiddenAt > AUTOLOCK_MS) { S.locked = true; S.sheets.slice().forEach(s => s.close()); render(); }
   });
-  window.addEventListener('online', () => { if (!S.page && S.tab === 'inicio') render(); });
+  window.addEventListener('online', () => { if (syReady()) syRun(false); if (!S.page && S.tab === 'inicio') render(); });
   window.addEventListener('offline', () => { if (!S.page && S.tab === 'inicio') render(); });
 
   // ---------- inicialização ----------
@@ -4116,7 +5098,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       return;
     }
     if (S.meta.pin && S.ds) S.locked = true;
+    await syLoad();
     render();
+    if (syReady()) syRun(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
     await storageInfo();
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
