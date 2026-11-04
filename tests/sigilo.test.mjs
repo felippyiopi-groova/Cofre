@@ -28,7 +28,7 @@ test('chaves privadas: destrancam com a senha certa ou a recuperação, nunca co
   assert.ok(await S.unlockPrivate(lockedRec, await S.recoveryKek(digitada)));
   const errada = await S.fromPassword('eu@x.com', 'senha errada 123', ITER);
   await assert.rejects(S.unlockPrivate(locked, errada.kek), /incorreta/);
-  await assert.rejects(S.recoveryKek('ABC'), /inválida/);
+  await assert.rejects(S.recoveryKek('ABC'), /12 palavras/);
 });
 
 test('trocar senha: retranca sem perder as chaves', async () => {
@@ -86,4 +86,30 @@ test('código de 6 dígitos: igual nos dois lados, diferente com outra chave', a
   assert.match(ab, /^\d{6}$/);
   assert.equal(ab, await S.safetyCode(b.pub.enc_public_key, a.pub.enc_public_key));
   assert.notEqual(ab, await S.safetyCode(a.pub.enc_public_key, c.pub.enc_public_key));
+});
+
+test('12 palavras: geradas da lista, aceitas com erros comuns de digitação', async () => {
+  const w = S.newRecoveryWords();
+  assert.equal(w.length, 12);
+  assert.ok(w.every(x => S.PALAVRAS.includes(x)));
+  assert.equal(S.PALAVRAS.length, 2048);
+  const keys = await S.newUserKeys();
+  const locked = await S.lockPrivate(keys, await S.recoveryKek(w));
+  // maiúsculas, acentos, vírgulas, números da lista e erro no fim da palavra (4 primeiras letras bastam)
+  const digitado = w.map((x, i) => (i + 1) + '. ' + (i === 0 ? x.toUpperCase() : i === 1 ? x.slice(0, 4) + 'xyz' : x)).join(', ').replace(/a/, 'á');
+  assert.ok(await S.unlockPrivate(locked, await S.recoveryKek(digitado)));
+  await assert.rejects(S.recoveryKek(w.slice(0, 11).join(' ')), /12 palavras/);
+  await assert.rejects(S.recoveryKek(w.slice(0, 11).join(' ') + ' qwerty'), /Não reconheci: qwerty/);
+  const outras = S.newRecoveryWords();
+  await assert.rejects(S.unlockPrivate(locked, await S.recoveryKek(outras)), /incorreta/);
+});
+
+test('esqueci a senha: as 12 palavras retrancam as chaves com a senha nova', async () => {
+  const keys = await S.newUserKeys(), w = S.newRecoveryWords();
+  const velha = await S.fromPassword('eu@x.com', 'senha esquecida', ITER), nova = await S.fromPassword('eu@x.com', 'senha nova 99', ITER);
+  const recLocked = await S.lockPrivate(keys, await S.recoveryKek(w));
+  const novoLocked = await S.relock(recLocked, await S.recoveryKek(w.join(' ')), nova.kek);
+  const p = await S.unlockPrivate(novoLocked, nova.kek);
+  assert.ok(p.encPrivate && p.signPrivate);
+  await assert.rejects(S.unlockPrivate(novoLocked, velha.kek));
 });
