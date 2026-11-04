@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-SN1pfwkDnoa2IJIIO5qT/9A/1MbUx/ydmfc3vr4hpJA='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-JIMwEWGCc5s+ujNWKgZZ76Y4eCgu9RC3h7EnothqpwA='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -350,13 +350,22 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function num(v) {
     if (typeof v === 'number' && isFinite(v)) return v;
     if (typeof v === 'string' && v.trim() !== '') {
-      const s = v.replace(/[R$€\s]/g, '');
-      const n = Number(/,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s);
+      let s = v.replace(/[R$€\s]/g, '');
+      if (/,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); // 1.234,56
+      else if (/^[-+]?\d{1,3}(\.\d{3}){2,}$/.test(s)) s = s.replace(/\./g, ''); // 1.234.567 (pontos de milhar)
+      const n = Number(s);
       return isFinite(n) ? n : NaN;
     }
     return NaN;
   }
-  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+  // Arredonda para centavos sem o erro binário do float (10.075 → 10.08) e de forma
+  // simétrica para negativos (-1.005 → -1.01). Usa a notação 'e' para deslocar a vírgula em decimal.
+  function round2(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return n;
+    const a = Math.abs(n);
+    const r = /e/i.test(String(a)) ? Math.round(a * 100) / 100 : Number(Math.round(Number(a + 'e2')) + 'e-2');
+    return n < 0 && r !== 0 ? -r : r;
+  }
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   function dateOnly(v) {
     if (typeof v !== 'string') return null;
@@ -386,6 +395,22 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     return (ds && ds.currency_default) || 'BRL';
   }
   function isObligationOpen(o) { return !CLOSED_OBLIGATION.has(norm(o && o.status)); }
+  // Moeda de um lançamento: a informada nele ou, na falta, a da conta de origem.
+  function txCurrency(t, ds) {
+    if (t && t.currency) return String(t.currency).toUpperCase();
+    const acc = ((ds && ds.accounts) || []).find(a => isObj(a) && idOf(a) === (t && t.account_id));
+    return String((acc && acc.currency) || (ds && ds.currency_default) || 'BRL').toUpperCase();
+  }
+  // Soma de contas a pagar só em reais (contas em outra moeda ficam fora, para não misturar € com R$).
+  // open=true usa o valor restante (pagamento parcial).
+  function sumObligationsBRL(list, open, ds) {
+    return round2((list || []).reduce((s, o) => s + (currencyOf(o, ds) === 'BRL' ? ((open ? openAmountOf(o) : amountOf(o)) || 0) : 0), 0));
+  }
+  // Quanto ainda falta pagar: se a conta tem "restante", vale o restante (pagamento parcial).
+  function openAmountOf(o) {
+    if (isObj(o) && o.amount_remaining_brl != null) { const r = num(o.amount_remaining_brl); if (!isNaN(r)) return r; }
+    return amountOf(o);
+  }
 
   // Coleção = lista de objetos com id/event_id.
   function isIdCollection(arr) {
@@ -755,7 +780,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         const e = effectOn(t, id);
         if (!e) continue;
         if (txCountsForAccount(t, cutoff)) { mov += e; n++; }
-        else if (txStatus(t) !== 'confirmado') pendingMov += e;
+        else if (txStatus(t) !== 'confirmado' && txStatus(t) !== 'cancelado') pendingMov += e;
       }
       out.push({
         id, name: acc.name || id, currency: (acc.currency || ds.currency_default || 'BRL').toUpperCase(),
@@ -811,12 +836,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     });
     const provTotal = round2(provisions.reduce((s, b) => s + (amountOf(b) || 0), 0));
     const open = (ds.obligations || []).filter(o => isObj(o) && isObligationOpen(o));
+    const openBRL = open.filter(o => currencyOf(o, ds) === 'BRL');
     const byMonth = {};
     for (const o of open) {
       const m = o.due_date ? String(o.due_date).slice(0, 7) : 'sem-data';
       byMonth[m] = byMonth[m] || { pendente: 0, planejado: 0, outros: 0, items: [] };
       const st = norm(o.status);
-      const a = amountOf(o) || 0;
+      const a = currencyOf(o, ds) === 'BRL' ? (openAmountOf(o) || 0) : 0; // totais em R$; outras moedas ficam em openOtherCurrency
       if (st === 'pendente') byMonth[m].pendente += a; else if (st === 'planejado') byMonth[m].planejado += a; else byMonth[m].outros += a;
       byMonth[m].items.push(o);
     }
@@ -830,8 +856,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       unknownAccounts: bal.filter(b => b.unknown),
       provisions, provTotal, freeAfterProvisions: round2(sum(brlFree) - provTotal),
       openObligations: open, byMonth, overdue, upcoming,
-      openPending: round2(open.filter(o => norm(o.status) === 'pendente').reduce((s, o) => s + (amountOf(o) || 0), 0)),
-      openPlanned: round2(open.filter(o => norm(o.status) !== 'pendente').reduce((s, o) => s + (amountOf(o) || 0), 0))
+      openPending: round2(openBRL.filter(o => norm(o.status) === 'pendente').reduce((s, o) => s + (openAmountOf(o) || 0), 0)),
+      openPlanned: round2(openBRL.filter(o => norm(o.status) !== 'pendente').reduce((s, o) => s + (openAmountOf(o) || 0), 0)),
+      openOtherCurrency: open.filter(o => currencyOf(o, ds) !== 'BRL')
     };
   }
 
@@ -841,8 +868,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!isObj(t) || txType(t) !== 'despesa' || txStatus(t) !== 'confirmado') continue;
       const m = (dateOnly(t.date) || '').slice(0, 7);
       if (!m) continue;
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {} };
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, otherCurrency: 0 };
       const a = num(t.amount) || 0;
+      if (txCurrency(t, ds) !== 'BRL') { months[m].otherCurrency += a; continue; } // não soma euro com real
       months[m].confirmed += a;
       const c = t.category || 'Sem categoria';
       months[m].byCat[c] = (months[m].byCat[c] || 0) + a;
@@ -850,11 +878,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     for (const [k, v] of Object.entries(ds)) {
       if (!/_summary$/.test(k) || !isObj(v) || !v.month) continue;
       const m = String(v.month).slice(0, 7);
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {} };
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, otherCurrency: 0 };
       months[m].historical += num(v.paid_total_brl) || 0;
       months[m].historicalSource = k;
     }
-    return Object.values(months).map(m => Object.assign(m, { confirmed: round2(m.confirmed), historical: round2(m.historical) }))
+    return Object.values(months).map(m => Object.assign(m, { confirmed: round2(m.confirmed), historical: round2(m.historical), otherCurrency: round2(m.otherCurrency) }))
       .sort((a, b) => a.month.localeCompare(b.month));
   }
 
@@ -952,7 +980,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
-    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, currencyOf, isObligationOpen,
+    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligationsBRL, currencyOf, txCurrency, isObligationOpen,
     prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
@@ -1168,7 +1196,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       const st = C.txStatus(t);
       if (st === 'cancelado') { res.cancelled++; continue; }
       const fl = flowOf(t, accountId, ds);
-      const cur = String(t.currency || (idx[t.account_id] || {}).currency || 'BRL').toUpperCase();
+      if (!isFinite(fl.amount)) { res.invalid = (res.invalid || 0) + 1; continue; } // valor ilegível: não contamina os totais
+      // Com conta filtrada, tudo está na moeda dela (ex.: transferência R$→€ entra em € na conta em euro).
+      const cur = accountId && idx[accountId] ? idx[accountId].currency : String(t.currency || (idx[t.account_id] || {}).currency || 'BRL').toUpperCase();
       const bucket = st === 'confirmado' ? res.confirmed : res.forecast;
       bucket[cur] = bucket[cur] || z();
       res.count++;
@@ -1203,7 +1233,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     for (const t of (ds.transactions || [])) {
       if (!t || !C.txCountsForAccount(t, cutoff)) continue;
       if ((C.dateOnly(t.date) || '') > dateInclusive) continue;
-      v += flowOf(t, accountId, ds).signed || 0;
+      const sg = flowOf(t, accountId, ds).signed;
+      if (isFinite(sg)) v += sg;
     }
     return { known: true, value: C.round2(v), cutoff };
   }
@@ -1599,8 +1630,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     ] });
     if (cat.rows.length) m.sections.push({ type: 'bars', title: `Gastos de ${p.label}`, items: cat.rows.map(r => ({ label: r.cat, value: r.total, display: money(r.total) })), total: money(C.round2(cat.histTotal + cat.afterTotal)) });
     const up = s.upcoming.slice(0, 6);
-    m.sections.push({ type: 'table', title: 'Próximos vencimentos', head: ['Conta', 'Vence', 'Valor'], widths: [50, 22, 28], align: ['left', 'left', 'right'], rows: up.map(o => [oblTitle(o), fd(o.due_date), money(C.amountOf(o))]), empty: 'Nenhum vencimento com data.',
-      raw: up.map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, { v: C.amountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Valor'], list: true });
+    m.sections.push({ type: 'table', title: 'Próximos vencimentos', head: ['Conta', 'Vence', 'Valor'], widths: [50, 22, 28], align: ['left', 'left', 'right'], rows: up.map(o => [oblTitle(o), fd(o.due_date), money(C.openAmountOf(o), C.currencyOf(o))]), empty: 'Nenhum vencimento com data.',
+      raw: up.map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, { v: C.openAmountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Valor'], list: true });
     m.sections.push({ type: 'notes', items: cat.notes.concat([`A pagar em aberto: ${money(s.openPending)} pendente e ${money(s.openPlanned)} planejado.`]) });
     m.formats = ['png', 'pdf']; m.file = 'resumo_familia_' + month;
     return m;
@@ -1613,13 +1644,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = baseModel('dividas', 'Demonstrativo de Dívidas e Vencimentos', 'Contas em aberto em ' + fd(t), [['Posição em', fd(t)]]);
     m.sections.push({ type: 'kpis', items: [
       { label: 'Pendente', value: money(s.openPending), sub: 'em aberto' }, { label: 'Planejado', value: money(s.openPlanned), sub: 'ainda por vir' },
-      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(s.overdue.reduce((a, o) => a + (C.amountOf(o) || 0), 0)) : 'nenhuma' },
+      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(C.sumObligationsBRL(s.overdue, true)) : 'nenhuma' },
       { label: 'Sem data definida', value: String(open.filter(o => !o.due_date).length) }
     ] });
     m.sections.push({ type: 'table', title: `Contas a pagar em aberto (${open.length})`, head: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação'], widths: [24, 13, 12, 14, 37], align: ['left', 'left', 'left', 'right', 'left'],
-      rows: open.map(o => [oblTitle(o), o.due_date ? fd(o.due_date) + (o.due_date < t ? ' (vencida)' : '') : 'sem data', human(o.status), money(C.amountOf(o), C.currencyOf(o, ds)), o.notes || '']),
+      rows: open.map(o => [oblTitle(o), o.due_date ? fd(o.due_date) + (o.due_date < t ? ' (vencida)' : '') : 'sem data', human(o.status), money(C.openAmountOf(o), C.currencyOf(o, ds)), o.notes || '']),
       foot: ['Total', '', '', money(C.round2(s.openPending + s.openPlanned)), ''], primary: true,
-      raw: open.map(o => [oblTitle(o), o.due_date ? { v: o.due_date, t: 'date' } : 'sem data', human(o.status), { v: C.amountOf(o), t: 'money' }, o.notes || '', o.id]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação', 'ID'] });
+      raw: open.map(o => [oblTitle(o), o.due_date ? { v: o.due_date, t: 'date' } : 'sem data', human(o.status), { v: C.openAmountOf(o), t: 'money' }, o.notes || '', o.id]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação', 'ID'] });
     const cr = s.credit.map(c => [human(c.name), money(c.limit), money(c.used), money(c.available), c.purchases ? money(c.purchases) : '—']);
     if (cr.length) m.sections.push({ type: 'table', title: 'Cartões de crédito', head: ['Cartão', 'Limite', 'Utilizado', 'Disponível', 'Compras após o corte'], widths: [26, 18, 18, 18, 20], align: ['left', 'right', 'right', 'right', 'right'], rows: cr,
       raw: s.credit.map(c => [human(c.name), { v: c.limit, t: 'money' }, { v: c.used, t: 'money' }, { v: c.available, t: 'money' }, { v: c.purchases, t: 'money' }]), rawHead: ['Cartão', 'Limite', 'Utilizado', 'Disponível', 'Compras após o corte'] });
@@ -2167,9 +2198,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         else list = s.upcoming.slice(0, 10);
         list.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
         const undated = s.openObligations.filter(o => !o.due_date);
-        const tot = list.reduce((a, o) => a + (C.amountOf(o) || 0), 0);
+        const tot = C.sumObligationsBRL(list, true);
         return { kind: 'answer', title: q.overdue ? 'Contas vencidas' : (p ? `Vencimentos · ${p.label}` : 'Próximos vencimentos'), total: money(C.round2(tot)), totalLabel: `${list.length} conta(s)`,
-          lines: list.map(o => ({ label: o.name || o.description || C.displayName(o.id), value: money(C.amountOf(o)), sub: `${o.due_date ? 'vence ' + fd(o.due_date) : 'sem data'} · ${o.status}`, act: 'obligation', id: o.id })),
+          lines: list.map(o => ({ label: o.name || o.description || C.displayName(o.id), value: money(C.openAmountOf(o), C.currencyOf(o)), sub: `${o.due_date ? 'vence ' + fd(o.due_date) : 'sem data'} · ${o.status}`, act: 'obligation', id: o.id })),
           notes: undated.length ? [`${undated.length} conta(s) em aberto não têm data de vencimento e não aparecem nesta lista.`] : [], actions: [{ label: 'Gerar demonstrativo', act: 'doc', params: { doc: 'debts', format: 'pdf' } }] };
       }
       case 'credit': return { kind: 'answer', title: 'Cartão de crédito', lines: s.credit.map(c => ({ label: C.displayName(c.name), value: 'Disponível ' + money(c.available), sub: `limite ${money(c.limit)} · utilizado ${money(c.used)}` })), notes: ['Limite de crédito não é dinheiro em caixa.'] };
@@ -2615,7 +2646,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       </div>`;
     if (prev.in || prev.out) h += `<div class="notice info">${ic('clock')}<div class="ntext"><b>Previsto, ainda não aplicado:</b> entradas ${M(prev.in)} · saídas ${M(prev.out)}.</div></div>`;
     if (hist) h += `<p class="small muted" style="margin:-4px 4px 12px">Resumo histórico do mês: ${M(C.num(hist.data.paid_total_brl))} pagos até ${fdate(ds.snapshot_date)} (informado no backup, já dentro dos saldos de corte).</p>`;
-    const paidTot = ob.paid.reduce((s, o) => s + (C.amountOf(o) || 0), 0), openTot = ob.open.reduce((s, o) => s + (C.amountOf(o) || 0), 0);
+    const paidTot = C.sumObligationsBRL(ob.paid, false), openTot = C.sumObligationsBRL(ob.open, true);
     h += `<button class="card row-item" style="border:0;width:100%" data-act="tab" data-tab="contas"><div class="main"><div class="t">Contas do mês</div><div class="s">${ob.paid.length} paga(s) · ${ob.open.length} em aberto${ob.undated.length ? ' · ' + ob.undated.length + ' sem data' : ''}</div></div><div class="amt"><span class="money" style="color:var(--pos)">${esc(money(paidTot))}</span><div class="s"><span class="money">${esc(money(openTot))} em aberto</span></div></div>${ic('right', 'chev')}</button>`;
 
     const next = sum.upcoming.slice(0, 4);
@@ -2704,7 +2735,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const over = o.due_date && o.due_date < today && C.isObligationOpen(o);
     return `<button class="row-item" data-act="obligation" data-id="${esc(o.id)}"><div class="ico">${catIcon(guessCategory(o), '📄')}</div>
       <div class="main"><div class="t">${esc(obligationTitle(o))}</div><div class="s">${statusBadge(o.status)} ${o.due_date ? (over ? '<b style="color:var(--danger)">venceu ' + fdate(o.due_date) + '</b>' : 'vence ' + fdate(o.due_date)) : 'sem vencimento definido'}</div></div>
-      <div class="amt ${/planejad/.test(C.norm(o.status)) ? 'forecast' : ''}">${M(C.amountOf(o), C.currencyOf(o, S.ds))}</div></button>`;
+      <div class="amt ${/planejad/.test(C.norm(o.status)) ? 'forecast' : ''}">${M(C.isObligationOpen(o) ? C.openAmountOf(o) : C.amountOf(o), C.currencyOf(o, S.ds))}</div></button>`;
   }
   function expensesChart(ds) {
     const data = C.monthlyExpenses(ds).slice(-6);
@@ -2718,7 +2749,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${d.confirmed ? `<div class="bar" style="height:${Math.max(3, d.confirmed / max * 100)}%"></div>` : ''}
         <div class="bl">${monthLabel(d.month, true)}</div></div>`;
     }
-    h += `</div><div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
+    const eurM = data.filter(d => d.otherCurrency);
+    h += `</div>${eurM.length ? `<div class="tiny muted" style="margin-top:8px">Valores em reais. Gastos em euro ficam fora do gráfico: ${eurM.map(d => esc(monthLabel(d.month, true)) + ' ' + esc(money(d.otherCurrency, 'EUR'))).join(' · ')}.</div>` : ''}<div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
     return h;
   }
 
@@ -3035,7 +3067,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       const ob = q('f-obl'); if (ob) ob.onchange = () => {
         readInputs();
         const o = (ds.obligations || []).find(x => x.id === d.obligation_id);
-        if (o && !d.amount) d.amount = String(C.amountOf(o)).replace('.', ',');
+        if (o && !d.amount) d.amount = String(C.openAmountOf(o)).replace('.', ',');
         if (o && !d.description) d.description = 'Pagamento ' + obligationTitle(o);
         if (o && !d.catManual) { d.category = guessCategory(o); d.catManual = true; }
         draw();
@@ -3110,6 +3142,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
     let h = `<h1 class="page-title">Contas a pagar</h1>
       <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned)}</div><div class="s">ainda por vir</div></div></div>`;
+    if (sum.openOtherCurrency.length) h += `<div class="notice info">${ic('info')}<div class="ntext">Os totais acima são em reais. Fora deles, em outra moeda: ${sum.openOtherCurrency.map(o => esc(obligationTitle(o)) + ' (' + esc(money(C.openAmountOf(o), C.currencyOf(o, ds))) + ')').join(', ')}.</div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>Vencimento passado:</b> ${sum.overdue.map(o => esc(obligationTitle(o))).join(', ')}. Se já pagou, toque na conta e registre o pagamento.</div></div>`;
     const months = Object.keys(sum.byMonth).sort((a, b) => a === 'sem-data' ? 1 : b === 'sem-data' ? -1 : a.localeCompare(b));
     if (!months.length) h += `<div class="card empty"><div class="e-ico">✅</div>Nenhuma conta em aberto.</div>`;
@@ -3142,7 +3175,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (pay) pay.onclick = () => {
       sh.close();
       const acc = (S.ds.accounts || []).find(a => a.id === 'nubank_debito') || (S.ds.accounts || [])[0] || {};
-      openTxForm(null, { type: 'despesa', amount: String(C.amountOf(o)).replace('.', ','), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), status: 'confirmado', account_id: acc.id || '' });
+      openTxForm(null, { type: 'despesa', amount: String(C.openAmountOf(o)).replace('.', ','), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), status: 'confirmado', account_id: acc.id || '' });
     };
     sh.foot.querySelector('[data-edit]').onclick = () => { sh.close(); editObligation(o); };
   }
@@ -3177,7 +3210,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function eventsIndex(ds, ym) {
     const ev = {};
     const add = (d, e) => { if (!d) return; (ev[d] = ev[d] || []).push(e); };
-    (ds.obligations || []).forEach(o => { if (o && o.due_date && C.isObligationOpen(o)) add(o.due_date, { kind: 'due', title: obligationTitle(o), amount: C.amountOf(o), status: o.status, act: 'obligation', id: o.id }); });
+    (ds.obligations || []).forEach(o => { if (o && o.due_date && C.isObligationOpen(o)) add(o.due_date, { kind: 'due', title: obligationTitle(o), amount: C.openAmountOf(o), status: o.status, act: 'obligation', id: o.id }); });
     (ds.income_forecasts || []).forEach(r => {
       if (!r) return;
       if (r.date) add(C.dateOnly(r.date), { kind: 'inc', title: humanize(r.id), amount: C.amountOf(r), status: r.status, act: 'raw', key: 'income_forecasts', id: r.id });
@@ -4208,7 +4241,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       <div class="card">${cat.rows.length ? cat.rows.map(x => `<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:14px"><span>${catIcon(x.cat, '•')} ${esc(x.cat)}</span><b class="money">${esc(money(x.total))}</b></div><div class="progress"><div style="width:${x.total / max * 100}%"></div></div>${x.hist && x.after ? `<div class="tiny muted">resumo ${esc(money(x.hist))} + lançamentos ${esc(money(x.after))}</div>` : (x.hist ? '<div class="tiny muted">do resumo histórico</div>' : '')}</div>`).join('') : '<div class="muted small">Nenhuma despesa no período.</div>'}
       ${cat.notes.map(n => `<div class="tiny muted" style="margin-top:6px">${esc(n)}</div>`).join('')}</div>
       <div class="section-title"><span>Contas do período</span></div>
-      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(ob.paid.reduce((s, o) => s + (C.amountOf(o) || 0), 0))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(ob.open.reduce((s, o) => s + (C.amountOf(o) || 0), 0))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
+      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(C.sumObligationsBRL(ob.paid, false))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(C.sumObligationsBRL(ob.open, true))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
       ${Object.keys(tot.byAccount).length ? `<div class="section-title"><span>Despesas por conta</span></div><div class="card"><dl class="kv">${Object.entries(tot.byAccount).map(([k, v]) => `<dt>${esc(accountName(k))}</dt><dd>${M(C.round2(v))}</dd>`).join('')}</dl></div>` : ''}
       <button class="btn" data-act="rep-doc">${ic('down')} Gerar documento deste período</button>
       <p class="tiny muted" style="margin-top:10px">Os totais atualizam na hora a cada lançamento. Antes da data de corte (${fdate(ds.snapshot_date)}) só existem os resumos informados no backup.</p>`;
