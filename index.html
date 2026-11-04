@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-WXnvu71zYvZhTi5UYnR5COp9Et/gCfw8O/YmA7XXlyI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-w1s1zupVBFlwScSBcCxD9ddyjTs0he54sgVbln2fxWU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -2652,6 +2652,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- utilidades ----------
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const I = {
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
     home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
     list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
     bill: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
@@ -3661,8 +3662,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       ['seguranca', 'lock', 'Segurança e privacidade', S.meta.pin ? 'PIN ativado' : 'PIN desativado'],
       ['sobre', 'info', 'Sobre e avisos', 'versão ' + APP_VERSION]
     ];
+    const logged = SY && SY.state && SY.state.session && SY.state.user;
     return `<h1 class="page-title">Mais</h1><div class="card"><div class="rows">` + items.map(([p, i, t, s]) =>
-      `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${ic('right', 'chev')}</button>`).join('') + `</div></div>`;
+      `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${ic('right', 'chev')}</button>`).join('') + `</div></div>` +
+      (logged ? `<div class="card"><button class="row-item" data-act="sy-logout"><div class="ico" style="color:var(--danger)">${ic('logout')}</div><div class="main"><div class="t" style="color:var(--danger)">Sair da conta</div><div class="s" style="word-break:break-all">${esc(SY.state.user.email)} · os dados continuam neste aparelho</div></div></button></div>` : '');
   }
 
   async function storageInfo() {
@@ -4291,7 +4294,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = mem.find(x => x.vault_id === want) || mem.find(x => x.role === 'owner') || mem[0];
     await syActivate(m);
     document.querySelectorAll('.toast').forEach(t => t.remove());
-    return { created, pending: !!SY.state.pending, inviteError };
+    // sameVault: este aparelho já sincronizava este cofre (ex.: saiu e entrou de novo) → junta sem perguntar
+    return { created, pending: !!SY.state.pending, inviteError, sameVault: want === m.vault_id };
   }
 
   // ---------- Esqueci minha senha ----------
@@ -4369,6 +4373,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           toast('Seu acesso ao cofre compartilhado foi removido'); render(); return;
         }
         st.role = eu[0].role;
+        if (!st.email_ok) { // contas antigas: grava o e-mail no perfil (aparece para quem divide o cofre)
+          try { const me = (await rest('profiles?select=email&user_id=eq.' + st.user.id))[0]; if (me && !me.email) await rest('profiles?user_id=eq.' + st.user.id, { method: 'PATCH', body: { email: st.user.email }, headers: { Prefer: 'return=minimal' } }); st.email_ok = true; } catch (e) { /* tenta na próxima */ }
+        }
         if (st.role === 'owner') {
           const reqs = await rest(`vault_invites?select=id&vault_id=eq.${V}&status=eq.accepted`);
           if (reqs.length && reqs.length !== st.requests) toast(`${reqs.length} pessoa(s) pedindo para entrar no cofre`, 'Ver', () => go('mais', 'sync'), 6000);
@@ -4474,7 +4481,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       return h;
     }
     const conf = st.conflicts || [];
-    h += `<div class="card"><div class="lbl">Conectado</div><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div>
+    h += `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div style="min-width:0"><div class="lbl">Conectado</div><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div></div>
+          <button class="btn secondary" data-act="sy-logout" style="width:auto;margin:0;padding:8px 14px;flex:none;color:var(--danger)">${ic('logout')} Sair</button></div>
         <div class="small muted">${st.role === 'owner' ? 'Dono do cofre' : st.role === 'editor' ? 'Pode editar' : 'Só vê'} · criptografia de ponta a ponta</div>
         <div class="small" style="margin-top:8px">Última sincronização: <b>${st.last_sync_at ? fdatetime(st.last_sync_at) : 'ainda não'}</b>${st.last_sync_at ? ` · ${st.last_received || 0} recebido(s), ${st.last_sent || 0} enviado(s)` : ''}</div>
         ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
@@ -4490,8 +4498,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         <li>Sem internet, tudo continua funcionando; envia quando a conexão voltar.</li>
         <li>Comprovantes (imagens) não sincronizam, só a lista deles.</li>
         <li>Pessoas convidadas veem e (se puderem editar) alteram os mesmos dados que você.</li></ul></div>
-      <button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Sair da conta neste aparelho</button>
-      <p class="help">Sair não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
+      <p class="help">Sair da conta (botão no topo) não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
     return h;
   }
   function pwField(id, label, autocomplete) {
@@ -4622,7 +4629,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (r.pending && !syReady()) { render(); return; } // aguardando a aprovação do dono (a tela mostra o código)
       if (r.inviteError) showError('Convite', esc(r.inviteError));
       // Este aparelho já tinha dados e o cofre já existia: juntar ou usar só os da nuvem?
-      if (!r.created && S.ds && Object.keys(S.ds).length) {
+      if (!r.created && !r.sameVault && S.ds && Object.keys(S.ds).length) {
         const keep = await confirmDialog({ title: 'Este aparelho já tem dados', text: 'Sua conta já tem dados na nuvem. <b>Juntar</b> mantém os dois (itens iguais não duplicam; se o mesmo item for diferente, fica o deste aparelho e o outro vai para "Conflitos").<br><br><b>Usar só os da nuvem</b> troca os dados deste aparelho pelos da nuvem (uma cópia automática dos atuais é guardada antes).', ok: 'Juntar', cancel: 'Usar só os da nuvem' });
         if (!keep) { await DB.saveWithBackup(makeBackup(S.ds, 'Antes de trocar pelos dados da nuvem'), null, S.meta); S.ds = null; }
       }
@@ -5396,7 +5403,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'sy-check': () => syCheckPending(true).catch(e => showError('Sincronização', esc(e.message))),
     'sy-accept': async () => { try { await syAcceptInvite(); render(); } catch (e) { showError('Convite', esc(e.message)); render(); } },
     'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
-    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
+    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); S.syMode = 'login'; render(); toast('Você saiu da conta. Os dados continuam neste aparelho.'); },
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
     'cur-main': () => changeMainCurrency(),
     'fx-now': () => { toast('Buscando cotações…'); fxRefresh(true).then(() => { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(S.fxError ? 'Não foi possível atualizar: ' + S.fxError : 'Cotações atualizadas'); }); },
