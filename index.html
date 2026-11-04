@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-MDixQ03M9IzO/qBgT63vrvqXDsAnE2t0R9GVBS2Q7xU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-WXnvu71zYvZhTi5UYnR5COp9Et/gCfw8O/YmA7XXlyI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -403,19 +403,33 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
   // ---------- moeda principal e câmbio ----------
   // ds.settings.main_currency: moeda em que os totais são mostrados (padrão BRL).
-  // ds.settings.exchange_rates[MOEDA] = { rate, updated_at }: 1 MOEDA = rate unidades da moeda principal.
-  // A cotação é digitada pela pessoa (o app não busca na internet).
+  // Cotação de cada moeda (1 MOEDA = rate na moeda principal), nesta ordem de prioridade:
+  //   1) fixada pela pessoa: ds.settings.exchange_rates[MOEDA] = { rate, fixed: true }
+  //   2) automática: tabela do dia baixada pelo app (fica neste aparelho, fora dos dados)
+  //   3) digitada antes da cotação automática existir (sem "fixed"): só se não houver automática
+  const AUTO = { main: null, date: null, rates: {} };
+  // perMain = { usd: 0.182, ... } (quanto de cada moeda vale 1 unidade da principal), como vem da tabela.
+  function setAutoRates(main, date, perMain) {
+    AUTO.main = main ? String(main).toUpperCase() : null; AUTO.date = date || null; AUTO.rates = {};
+    for (const [k, v] of Object.entries(perMain || {})) { const n = Number(v); if (n > 0 && isFinite(n)) AUTO.rates[k.toUpperCase()] = 1 / n; }
+  }
+  function rateInfo(ds, cur) {
+    cur = String(cur || '').toUpperCase();
+    const main = mainCurrency(ds);
+    if (!cur || cur === main) return { rate: 1, source: 'principal' };
+    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
+    const r = rates[cur], manual = num(isObj(r) ? r.rate : r);
+    if (manual > 0 && isObj(r) && r.fixed) return { rate: manual, source: 'fixada', date: r.updated_at || null };
+    if (AUTO.main === main && AUTO.rates[cur] > 0) return { rate: AUTO.rates[cur], source: 'automatica', date: AUTO.date };
+    if (manual > 0) return { rate: manual, source: 'digitada', date: isObj(r) ? r.updated_at || null : null };
+    return { rate: null, source: null };
+  }
+  function autoRatesState() { return { main: AUTO.main, date: AUTO.date, count: Object.keys(AUTO.rates).length }; }
   function mainCurrency(ds) {
     const st = ds && isObj(ds.settings) ? ds.settings : {};
     return String(st.main_currency || (ds && ds.currency_default) || 'BRL').toUpperCase();
   }
-  function rateOf(ds, cur) {
-    cur = String(cur || '').toUpperCase();
-    if (!cur || cur === mainCurrency(ds)) return 1;
-    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
-    const r = rates[cur]; const n = num(isObj(r) ? r.rate : r);
-    return n > 0 ? n : null;
-  }
+  function rateOf(ds, cur) { return rateInfo(ds, cur).rate; }
   // Valor convertido para a moeda principal, ou null se falta cotação.
   function toMain(amount, cur, ds) {
     const r = rateOf(ds, cur);
@@ -934,7 +948,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'Novos lançamentos vão em "transactions", cada um com "id" novo e único (ex.: tx-2026-10-26-uber-ida), "date" AAAA-MM-DD, "type" (despesa | receita | transferencia | pagamento_fatura | emprestimo | provisao | ajuste), "status" (confirmado | pendente | planejado | estimado | cancelado), "account_id" (de accounts ou credit_facilities), "amount" positivo, "currency", "category", "description", "origin" (usuario | recibo | calculo), "created_at" e "updated_at".',
     'Use status "confirmado" somente para o que o usuário confirmou que aconteceu. Compras planejadas continuam "planejado".',
     'Contas em "accounts": "id", "name", "institution" (banco), "currency" (código ISO de 3 letras, ex.: BRL, USD, EUR), "snapshot_balance", "snapshot_date" e "status" ("operacional" ou "reserva"; reserva não entra no disponível).',
-    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações digitadas pelo usuário (1 MOEDA = "rate" na moeda principal). Não altere sem pedido explícito e não invente cotações.',
+    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações FIXADAS pelo usuário (1 MOEDA = "rate" na moeda principal, com "fixed": true). As demais o app busca sozinho todo dia. Não altere sem pedido explícito e não invente cotações.',
     'Não altere "snapshot_balance" nem "snapshot_date" sem pedido explícito. O app calcula: saldo = snapshot + lançamentos confirmados com data posterior ao corte.',
     'Lançamento na MESMA data do corte só entra no saldo se tiver "after_snapshot": true.',
     'Compra no cartão de crédito: type "despesa" com "account_id" = id do cartão em credit_facilities (aumenta a fatura, não desconta conta bancária). Pagamento da fatura: type "pagamento_fatura", "account_id" = conta que pagou, "to_account_id" = cartão (não é nova despesa).',
@@ -1025,7 +1039,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
-    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, toMain, currencyOf, txCurrency, isObligationOpen,
+    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
     prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
@@ -2387,7 +2401,25 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     return { authSecret, kek, kdf: { alg: 'PBKDF2-SHA256', iterations: iterations || PBKDF2_ITER, salt: 'sha256(cofre-v1|email)' } };
   }
 
-  // ---------- chave de recuperação: 32 bytes em base32 (sem letras ambíguas) ----------
+  // ---------- chave de recuperação: 12 palavras (lista BIP39 em português, licença ISC) ----------
+  // 12 palavras sorteadas de 2048 = 132 bits: impossível de adivinhar, fácil de anotar.
+  // As 4 primeiras letras de cada palavra são únicas, então erros no fim da palavra são tolerados.
+  const PALAVRAS = 'abacate abaixo abalar abater abduzir abelha aberto abismo abotoar abranger abreviar abrigar abrupto absinto absoluto absurdo abutre acabado acalmar acampar acanhar acaso aceitar acelerar acenar acervo acessar acetona achatar acidez acima acionado acirrar aclamar aclive acolhida acomodar acoplar acordar acumular acusador adaptar adega adentro adepto adequar aderente adesivo adeus adiante aditivo adjetivo adjunto admirar adorar adquirir adubo adverso advogado aeronave afastar aferir afetivo afinador afivelar aflito afluente afrontar agachar agarrar agasalho agenciar agilizar agiota agitado agora agradar agreste agrupar aguardar agulha ajoelhar ajudar ajustar alameda alarme alastrar alavanca albergue albino alcatra aldeia alecrim alegria alertar alface alfinete algum alheio aliar alicate alienar alinhar aliviar almofada alocar alpiste alterar altitude alucinar alugar aluno alusivo alvo amaciar amador amarelo amassar ambas ambiente ameixa amenizar amido amistoso amizade amolador amontoar amoroso amostra amparar ampliar ampola anagrama analisar anarquia anatomia andaime anel anexo angular animar anjo anomalia anotado ansioso anterior anuidade anunciar anzol apagador apalpar apanhado apego apelido apertada apesar apetite apito aplauso aplicada apoio apontar aposta aprendiz aprovar aquecer arame aranha arara arcada ardente areia arejar arenito aresta argiloso argola arma arquivo arraial arrebate arriscar arroba arrumar arsenal arterial artigo arvoredo asfaltar asilado aspirar assador assinar assoalho assunto astral atacado atadura atalho atarefar atear atender aterro ateu atingir atirador ativo atoleiro atracar atrevido atriz atual atum auditor aumentar aura aurora autismo autoria autuar avaliar avante avaria avental avesso aviador avisar avulso axila azarar azedo azeite azulejo babar babosa bacalhau bacharel bacia bagagem baiano bailar baioneta bairro baixista bajular baleia baliza balsa banal bandeira banho banir banquete barato barbado baronesa barraca barulho baseado bastante batata batedor batida batom batucar baunilha beber beijo beirada beisebol beldade beleza belga beliscar bendito bengala benzer berimbau berlinda berro besouro bexiga bezerro bico bicudo bienal bifocal bifurcar bigorna bilhete bimestre bimotor biologia biombo biosfera bipolar birrento biscoito bisneto bispo bissexto bitola bizarro blindado bloco bloquear boato bobagem bocado bocejo bochecha boicotar bolada boletim bolha bolo bombeiro bonde boneco bonita borbulha borda boreal borracha bovino boxeador branco brasa braveza breu briga brilho brincar broa brochura bronzear broto bruxo bucha budismo bufar bule buraco busca busto buzina cabana cabelo cabide cabo cabrito cacau cacetada cachorro cacique cadastro cadeado cafezal caiaque caipira caixote cajado caju calafrio calcular caldeira calibrar calmante calota camada cambista camisa camomila campanha camuflar canavial cancelar caneta canguru canhoto canivete canoa cansado cantar canudo capacho capela capinar capotar capricho captador capuz caracol carbono cardeal careca carimbar carneiro carpete carreira cartaz carvalho casaco casca casebre castelo casulo catarata cativar caule causador cautelar cavalo caverna cebola cedilha cegonha celebrar celular cenoura censo centeio cercar cerrado certeiro cerveja cetim cevada chacota chaleira chamado chapada charme chatice chave chefe chegada cheiro cheque chicote chifre chinelo chocalho chover chumbo chutar chuva cicatriz ciclone cidade cidreira ciente cigana cimento cinto cinza ciranda circuito cirurgia citar clareza clero clicar clone clube coado coagir cobaia cobertor cobrar cocada coelho coentro coeso cogumelo coibir coifa coiote colar coleira colher colidir colmeia colono coluna comando combinar comentar comitiva comover complexo comum concha condor conectar confuso congelar conhecer conjugar consumir contrato convite cooperar copeiro copiador copo coquetel coragem cordial corneta coronha corporal correio cortejo coruja corvo cosseno costela cotonete couro couve covil cozinha cratera cravo creche credor creme crer crespo criada criminal crioulo crise criticar crosta crua cruzeiro cubano cueca cuidado cujo culatra culminar culpar cultura cumprir cunhado cupido curativo curral cursar curto cuspir custear cutelo damasco datar debater debitar deboche debulhar decalque decimal declive decote decretar dedal dedicado deduzir defesa defumar degelo degrau degustar deitado deixar delator delegado delinear delonga demanda demitir demolido dentista depenado depilar depois depressa depurar deriva derramar desafio desbotar descanso desenho desfiado desgaste desigual deslize desmamar desova despesa destaque desviar detalhar detentor detonar detrito deusa dever devido devotado dezena diagrama dialeto didata difuso digitar dilatado diluente diminuir dinastia dinheiro diocese direto discreta disfarce disparo disquete dissipar distante ditador diurno diverso divisor divulgar dizer dobrador dolorido domador dominado donativo donzela dormente dorsal dosagem dourado doutor drenagem drible drogaria duelar duende dueto duplo duquesa durante duvidoso eclodir ecoar ecologia edificar edital educado efeito efetivar ejetar elaborar eleger eleitor elenco elevador eliminar elogiar embargo embolado embrulho embutido emenda emergir emissor empatia empenho empinado empolgar emprego empurrar emulador encaixe encenado enchente encontro endeusar endossar enfaixar enfeite enfim engajado engenho englobar engomado engraxar enguia enjoar enlatar enquanto enraizar enrolado enrugar ensaio enseada ensino ensopado entanto enteado entidade entortar entrada entulho envergar enviado envolver enxame enxerto enxofre enxuto epiderme equipar ereto erguido errata erva ervilha esbanjar esbelto escama escola escrita escuta esfinge esfolar esfregar esfumado esgrima esmalte espanto espelho espiga esponja espreita espumar esquerda estaca esteira esticar estofado estrela estudo esvaziar etanol etiqueta euforia europeu evacuar evaporar evasivo eventual evidente evoluir exagero exalar examinar exato exausto excesso excitar exclamar executar exemplo exibir exigente exonerar expandir expelir expirar explanar exposto expresso expulsar externo extinto extrato fabricar fabuloso faceta facial fada fadiga faixa falar falta familiar fandango fanfarra fantoche fardado farelo farinha farofa farpa fartura fatia fator favorita faxina fazenda fechado feijoada feirante felino feminino fenda feno fera feriado ferrugem ferver festejar fetal feudal fiapo fibrose ficar ficheiro figurado fileira filho filme filtrar firmeza fisgada fissura fita fivela fixador fixo flacidez flamingo flanela flechada flora flutuar fluxo focal focinho fofocar fogo foguete foice folgado folheto forjar formiga forno forte fosco fossa fragata fralda frango frasco fraterno freira frente fretar frieza friso fritura fronha frustrar fruteira fugir fulano fuligem fundar fungo funil furador furioso futebol gabarito gabinete gado gaiato gaiola gaivota galega galho galinha galocha ganhar garagem garfo gargalo garimpo garoupa garrafa gasoduto gasto gata gatilho gaveta gazela gelado geleia gelo gemada gemer gemido generoso gengiva genial genoma genro geologia gerador germinar gesso gestor ginasta gincana gingado girafa girino glacial glicose global glorioso goela goiaba golfe golpear gordura gorjeta gorro gostoso goteira governar gracejo gradual grafite gralha grampo granada gratuito graveto graxa grego grelhar greve grilo grisalho gritaria grosso grotesco grudado grunhido gruta guache guarani guaxinim guerrear guiar guincho guisado gula guloso guru habitar harmonia haste haver hectare herdar heresia hesitar hiato hibernar hidratar hiena hino hipismo hipnose hipoteca hoje holofote homem honesto honrado hormonal hospedar humorado iate ideia idoso ignorado igreja iguana ileso ilha iludido iluminar ilustrar imagem imediato imenso imersivo iminente imitador imortal impacto impedir implante impor imprensa impune imunizar inalador inapto inativo incenso inchar incidir incluir incolor indeciso indireto indutor ineficaz inerente infantil infestar infinito inflamar informal infrator ingerir inibido inicial inimigo injetar inocente inodoro inovador inox inquieto inscrito inseto insistir inspetor instalar insulto intacto integral intimar intocado intriga invasor inverno invicto invocar iogurte iraniano ironizar irreal irritado isca isento isolado isqueiro italiano janeiro jangada janta jararaca jardim jarro jasmim jato javali jazida jejum joaninha joelhada jogador joia jornal jorrar jovem juba judeu judoca juiz julgador julho jurado jurista juro justa labareda laboral lacre lactante ladrilho lagarta lagoa laje lamber lamentar laminar lampejo lanche lapidar lapso laranja lareira largura lasanha lastro lateral latido lavanda lavoura lavrador laxante lazer lealdade lebre legado legendar legista leigo leiloar leitura lembrete leme lenhador lentilha leoa lesma leste letivo letreiro levar leveza levitar liberal libido liderar ligar ligeiro limitar limoeiro limpador linda linear linhagem liquidez listagem lisura litoral livro lixa lixeira locador locutor lojista lombo lona longe lontra lorde lotado loteria loucura lousa louvar luar lucidez lucro luneta lustre lutador luva macaco macete machado macio madeira madrinha magnata magreza maior mais malandro malha malote maluco mamilo mamoeiro mamute manada mancha mandato manequim manhoso manivela manobrar mansa manter manusear mapeado maquinar marcador maresia marfim margem marinho marmita maroto marquise marreco martelo marujo mascote masmorra massagem mastigar matagal materno matinal matutar maxilar medalha medida medusa megafone meiga melancia melhor membro memorial menino menos mensagem mental merecer mergulho mesada mesclar mesmo mesquita mestre metade meteoro metragem mexer mexicano micro migalha migrar milagre milenar milhar mimado minerar minhoca ministro minoria miolo mirante mirtilo misturar mocidade moderno modular moeda moer moinho moita moldura moleza molho molinete molusco montanha moqueca morango morcego mordomo morena mosaico mosquete mostarda motel motim moto motriz muda muito mulata mulher multar mundial munido muralha murcho muscular museu musical nacional nadador naja namoro narina narrado nascer nativa natureza navalha navegar navio neblina nebuloso negativa negociar negrito nervoso neta neural nevasca nevoeiro ninar ninho nitidez nivelar nobreza noite noiva nomear nominal nordeste nortear notar noticiar noturno novelo novilho novo nublado nudez numeral nupcial nutrir nuvem obcecado obedecer objetivo obrigado obscuro obstetra obter obturar ocidente ocioso ocorrer oculista ocupado ofegante ofensiva oferenda oficina ofuscado ogiva olaria oleoso olhar oliveira ombro omelete omisso omitir ondulado oneroso ontem opcional operador oponente oportuno oposto orar orbitar ordem ordinal orfanato orgasmo orgulho oriental origem oriundo orla ortodoxo orvalho oscilar ossada osso ostentar otimismo ousadia outono outubro ouvido ovelha ovular oxidar oxigenar pacato paciente pacote pactuar padaria padrinho pagar pagode painel pairar paisagem palavra palestra palheta palito palmada palpitar pancada panela panfleto panqueca pantanal papagaio papelada papiro parafina parcial pardal parede partida pasmo passado pastel patamar patente patinar patrono paulada pausar peculiar pedalar pedestre pediatra pedra pegada peitoral peixe pele pelicano penca pendurar peneira penhasco pensador pente perceber perfeito pergunta perito permitir perna perplexo persiana pertence peruca pescado pesquisa pessoa petiscar piada picado piedade pigmento pilastra pilhado pilotar pimenta pincel pinguim pinha pinote pintar pioneiro pipoca piquete piranha pires pirueta piscar pistola pitanga pivete planta plaqueta platina plebeu plumagem pluvial pneu poda poeira poetisa polegada policiar poluente polvilho pomar pomba ponderar pontaria populoso porta possuir postal pote poupar pouso povoar praia prancha prato praxe prece predador prefeito premiar prensar preparar presilha pretexto prevenir prezar primata princesa prisma privado processo produto profeta proibido projeto prometer propagar prosa protetor provador publicar pudim pular pulmonar pulseira punhal punir pupilo pureza puxador quadra quantia quarto quase quebrar queda queijo quente querido quimono quina quiosque rabanada rabisco rachar racionar radial raiar rainha raio raiva rajada ralado ramal ranger ranhura rapadura rapel rapidez raposa raquete raridade rasante rascunho rasgar raspador rasteira rasurar ratazana ratoeira realeza reanimar reaver rebaixar rebelde rebolar recado recente recheio recibo recordar recrutar recuar rede redimir redonda reduzida reenvio refinar refletir refogar refresco refugiar regalia regime regra reinado reitor rejeitar relativo remador remendo remorso renovado reparo repelir repleto repolho represa repudiar requerer resenha resfriar resgatar residir resolver respeito ressaca restante resumir retalho reter retirar retomada retratar revelar revisor revolta riacho rica rigidez rigoroso rimar ringue risada risco risonho robalo rochedo rodada rodeio rodovia roedor roleta romano roncar rosado roseira rosto rota roteiro rotina rotular rouco roupa roxo rubro rugido rugoso ruivo rumo rupestre russo sabor saciar sacola sacudir sadio safira saga sagrada saibro salada saleiro salgado saliva salpicar salsicha saltar salvador sambar samurai sanar sanfona sangue sanidade sapato sarda sargento sarjeta saturar saudade saxofone sazonal secar secular seda sedento sediado sedoso sedutor segmento segredo segundo seiva seleto selvagem semanal semente senador senhor sensual sentado separado sereia seringa serra servo setembro setor sigilo silhueta silicone simetria simpatia simular sinal sincero singular sinopse sintonia sirene siri situado soberano sobra socorro sogro soja solda soletrar solteiro sombrio sonata sondar sonegar sonhador sono soprano soquete sorrir sorteio sossego sotaque soterrar sovado sozinho suavizar subida submerso subsolo subtrair sucata sucesso suco sudeste sufixo sugador sugerir sujeito sulfato sumir suor superior suplicar suposto suprimir surdina surfista surpresa surreal surtir suspiro sustento tabela tablete tabuada tacho tagarela talher talo talvez tamanho tamborim tampa tangente tanto tapar tapioca tardio tarefa tarja tarraxa tatuagem taurino taxativo taxista teatral tecer tecido teclado tedioso teia teimar telefone telhado tempero tenente tensor tentar termal terno terreno tese tesoura testado teto textura texugo tiara tigela tijolo timbrar timidez tingido tinteiro tiragem titular toalha tocha tolerar tolice tomada tomilho tonel tontura topete tora torcido torneio torque torrada torto tostar touca toupeira toxina trabalho tracejar tradutor trafegar trajeto trama trancar trapo traseiro tratador travar treino tremer trepidar trevo triagem tribo triciclo tridente trilogia trindade triplo triturar triunfal trocar trombeta trova trunfo truque tubular tucano tudo tulipa tupi turbo turma turquesa tutelar tutorial uivar umbigo unha unidade uniforme urologia urso urtiga urubu usado usina usufruir vacina vadiar vagaroso vaidoso vala valente validade valores vantagem vaqueiro varanda vareta varrer vascular vasilha vassoura vazar vazio veado vedar vegetar veicular veleiro velhice veludo vencedor vendaval venerar ventre verbal verdade vereador vergonha vermelho verniz versar vertente vespa vestido vetorial viaduto viagem viajar viatura vibrador videira vidraria viela viga vigente vigiar vigorar vilarejo vinco vinheta vinil violeta virada virtude visitar visto vitral viveiro vizinho voador voar vogal volante voleibol voltagem volumoso vontade vulto vuvuzela xadrez xarope xeque xeretar xerife xingar zangado zarpar zebu zelador zombar zoologia zumbido'.split(' ');
+  const PREFIXO = new Map(PALAVRAS.map((p, i) => [p.slice(0, 4), i]));
+  function newRecoveryWords() {
+    const r = (root && root.crypto ? root.crypto : crypto).getRandomValues(new Uint16Array(12)); // 65536 é múltiplo de 2048: sem viés
+    return Array.from(r, n => PALAVRAS[n & 2047]);
+  }
+  // Normaliza o que a pessoa digitou: minúsculas, sem acento, separa por espaço/vírgula/número.
+  function parseWords(text) {
+    const parts = String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    if (parts.length !== 12) return { error: parts.length ? `Digite as 12 palavras (você digitou ${parts.length}).` : 'Digite as 12 palavras.' };
+    const out = [], bad = [];
+    for (const p of parts) { const i = PREFIXO.get(p.slice(0, 4)); if (i === undefined || p.length < 4 && PALAVRAS[i] !== p) bad.push(p); else out.push(PALAVRAS[i]); }
+    if (bad.length) return { error: `Não reconheci: ${bad.join(', ')}. Confira a grafia.` };
+    return { words: out };
+  }
+  // ---------- formato antigo da chave (52 caracteres em base32), aceito por compatibilidade ----------
   const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   function newRecoveryCode() {
     const bytes = rnd(32); let bits = '', out = '';
@@ -2403,10 +2435,12 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const out = new Uint8Array(32); for (let i = 0; i < 32; i++) out[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
     return out;
   }
-  async function recoveryKek(code) {
-    const raw = recoveryBytes(code);
-    if (!raw) throw Object.assign(new Error('Chave de recuperação inválida. Confira as letras e números.'), { friendly: true });
-    return hkdfKey(raw, 'cofre-recuperacao', AES, ['encrypt', 'decrypt']);
+  async function recoveryKek(input) {
+    const old = recoveryBytes(input);
+    if (old) return hkdfKey(old, 'cofre-recuperacao', AES, ['encrypt', 'decrypt']);
+    const p = Array.isArray(input) ? { words: input } : parseWords(input);
+    if (p.error) throw Object.assign(new Error(p.error), { friendly: true });
+    return hkdfKey(await sha256('cofre-palavras|' + p.words.join(' ')), 'cofre-recuperacao', AES, ['encrypt', 'decrypt']);
   }
 
   // ---------- chaves da pessoa ----------
@@ -2500,7 +2534,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
 
   const api = {
-    PBKDF2_ITER, b64, sha256, fromPassword, newRecoveryCode, recoveryBytes, recoveryKek,
+    PBKDF2_ITER, b64, sha256, fromPassword, newRecoveryCode, newRecoveryWords, parseWords, PALAVRAS, recoveryBytes, recoveryKek,
     newUserKeys, publicKeys, lockPrivate, unlockPrivate, relock,
     newVaultSecret, vaultKeys, lockForMember, unlockVaultSecret,
     rid, sealRecord, openRecord, signRecord, verifyRecord, safetyCode
@@ -2841,7 +2875,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     S.ds = newDs; S.meta = meta;
     render();
     if (syReady()) syLater();
-    if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
+    if (C.summarize(newDs).missingRates.length) fxRefresh(true);
+    // No modo "só ver" o aviso tem prioridade: a alteração NÃO vai para o cofre compartilhado.
+    if (syReady() && SY.state.role === 'viewer') toast('Você está no modo "só ver": esta alteração fica só neste aparelho e não vai para o cofre compartilhado', null, null, 6000);
+    else if (opts.toast) toast(opts.toast, 'Exportar', () => go('mais', 'backup'));
   }
   async function saveMeta(patch) { S.meta = Object.assign({}, S.meta, patch); await DB.set('meta', S.meta); }
 
@@ -2947,7 +2984,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       </div>` : ''}
       <div class="foot">Saldo informado de cada conta + lançamentos confirmados${sum.currencies.length > 1 ? ', outras moedas convertidas pela cotação que você informou' : ''}. Não inclui crédito, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
     </section>
-    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Falta cotação:</b> ${esc(sum.missingRates.join(', '))} ficam fora do patrimônio total. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>` : ''}
+    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Sem cotação para ${esc(sum.missingRates.join(', '))}</b>: fica fora do patrimônio total até o app conseguir baixar a cotação (precisa de internet) ou você fixar um valor. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Ver cotações</button></div></div>` : ''}
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
       <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
@@ -3752,7 +3789,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       <div class="card"><div class="lbl">Privacidade</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
         <li>Nenhum dado financeiro sai do aparelho sem você pedir: só quando você exporta, envia ao GitHub ou liga a <b>Sincronização</b>. Na sincronização, tudo sai <b>embaralhado</b>: o servidor não consegue ler, nem o dono do app.</li>
         <li>Sem telemetria, sem anúncios, sem rastreamento.</li>
-        <li>A internet só é usada para baixar o app (e atualizações) e, se você ativar, para o backup no GitHub e para a sincronização (servidor Supabase).</li>
+        <li>A internet só é usada para baixar o app (e atualizações), a <b>tabela pública de cotações</b> (traz todas as moedas; não revela as suas nem valores; dá para desligar em Moedas e câmbio) e, se você ativar, o backup no GitHub e a sincronização (servidor Supabase).</li>
         <li>Backup criptografado usa AES-GCM 256 com senha (PBKDF2, 600 mil iterações). Senha perdida = backup irrecuperável.</li></ul></div>
       <div class="card"><div class="lbl" style="color:var(--danger)">Zona de perigo</div><p class="small">Apaga todos os dados, cópias automáticas e comprovantes deste aparelho. Exporte um backup antes.</p><button class="btn danger" data-act="wipe">${ic('trash')} Apagar tudo deste aparelho</button></div>`;
   }
@@ -4136,27 +4173,74 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
   const rest = async (path, opts) => nFetch('/rest/v1/' + path, Object.assign({}, opts, { auth: await nToken() }));
 
-  // Mostra a chave de recuperação e confere se a pessoa anotou (digitando 2 grupos sorteados).
-  function showRecoveryCode(code) {
+  // Mostra as 12 palavras de recuperação, oferece copiar/salvar e confere 1 palavra sorteada.
+  function showRecoveryWords(words) {
     return new Promise(resolve => {
-      const groups = code.split('-'), a = 1 + Math.floor(Math.random() * 6), b = 7 + Math.floor(Math.random() * 6);
+      const k = 1 + Math.floor(Math.random() * 12);
+      const texto = 'Cofre: palavras de recuperação (guarde em local seguro)\n' + words.map((w, i) => `${i + 1}. ${w}`).join('\n');
       let done = false;
       const sh = openSheet({
-        title: 'Sua chave de recuperação', sticky: true,
-        body: `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Anote agora, em papel ou num gerenciador de senhas.</b> Se você esquecer a senha, só esta chave devolve o acesso aos dados. Ninguém, nem o suporte, consegue recuperá-la. Ela aparece só esta vez.</div></div>
-          <div class="card" style="font-family:ui-monospace,Menlo,monospace;font-size:17px;line-height:1.7;letter-spacing:.5px;word-spacing:6px;text-align:center;user-select:all">${groups.map((g, i) => `<span style="white-space:nowrap"><span class="tiny muted">${i + 1}</span>&nbsp;${esc(g)}</span>`).join(' ')}</div>
-          <div class="two"><div class="field"><label for="rc-a">Digite o grupo ${a}</label><input class="input" id="rc-a" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
-          <div class="field"><label for="rc-b">Digite o grupo ${b}</label><input class="input" id="rc-b" autocomplete="off" autocapitalize="characters" spellcheck="false"></div></div>
-          <div id="rc-err" class="small" style="color:var(--danger)"></div>`,
+        title: 'Suas 12 palavras de recuperação', sticky: true,
+        body: `<p class="small" style="margin-top:0">Se um dia você esquecer a senha, <b>só estas palavras</b> devolvem o acesso aos seus dados. Anote no papel ou salve no gerenciador de senhas. Elas aparecem só agora.</p>
+          <div class="card" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 10px;font-size:15px;user-select:all">${words.map((w, i) => `<div><span class="tiny muted">${i + 1}.</span> <b>${esc(w)}</b></div>`).join('')}</div>
+          <div class="btn-row" style="margin-bottom:14px"><button class="btn secondary" data-copy>Copiar</button><button class="btn secondary" data-save>Salvar arquivo</button></div>
+          <div class="field"><label for="rw-k">Para conferir, digite a palavra nº ${k}</label><input class="input" id="rw-k" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+          <div id="rw-err" class="small" style="color:var(--danger)"></div>`,
         footHtml: `<button class="btn" data-ok>Anotei, continuar</button>`,
         onClose: () => { if (!done) resolve(false); }
       });
+      sh.body.querySelector('[data-copy]').onclick = async () => { try { await navigator.clipboard.writeText(texto); toast('Palavras copiadas: cole no seu gerenciador de senhas'); } catch (e) { toast('Não deu para copiar: anote à mão'); } };
+      sh.body.querySelector('[data-save]').onclick = () => shareOrDownload(new Blob([texto], { type: 'text/plain' }), 'cofre-palavras-de-recuperacao.txt');
       sh.foot.querySelector('[data-ok]').onclick = () => {
-        const n = v => v.trim().toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1');
-        if (n(sh.body.querySelector('#rc-a').value) !== groups[a - 1] || n(sh.body.querySelector('#rc-b').value) !== groups[b - 1]) { sh.body.querySelector('#rc-err').textContent = 'Os grupos não conferem. Olhe de novo a chave anotada.'; return; }
+        const p = Sigilo.parseWords(Array(12).fill(sh.body.querySelector('#rw-k').value).join(' '));
+        if (p.error || p.words[0] !== words[k - 1]) { sh.body.querySelector('#rw-err').textContent = `Não confere com a palavra nº ${k}. Olhe de novo o que você anotou.`; return; }
         done = true; sh.close(); resolve(true);
       };
     });
+  }
+
+  // Preferências que sobrevivem a sair/entrar: cofre escolhido e pedido de entrada em andamento, por usuário.
+  async function syPref() { try { return (await DB.get('sync_pref')) || {}; } catch (e) { return {}; } }
+  async function sySetPref(patch) { const p = Object.assign(await syPref(), patch); await DB.set('sync_pref', p); return p; }
+  const hexOf = u8 => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+  async function syInviteToken() {
+    let v = null; try { v = await DB.get('sync_invite'); } catch (e) { v = null; }
+    return v && v.token && Date.now() - v.at < 48 * 3600e3 ? v.token : null;
+  }
+  // Aceita o convite guardado neste aparelho (link aberto). Não dá acesso ainda: o dono precisa aprovar.
+  async function syAcceptInvite() {
+    const tok = await syInviteToken(); if (!tok) return null;
+    const uid = SY.state.user.id;
+    try {
+      const r = (await rest('rpc/accept_invite_v2', { method: 'POST', body: { token: tok } }))[0];
+      if (!r) throw nErr('Convite inválido, já usado ou expirado. Peça um novo link.');
+      const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
+      const code = await Sigilo.safetyCode(me.enc_public_key, r.owner_enc_public_key);
+      SY.state.pending = { vault_id: r.vault_id, role: r.role, owner_email: r.owner_email || 'o dono do cofre', code, since: nowIso() };
+      await sySetPref({ ['pending_' + uid]: SY.state.pending });
+      await sySave();
+      return SY.state.pending;
+    } catch (e) {
+      if (e.status === 400 || /inválido|expirado|já é membro/.test(e.message)) throw nErr(/já é membro/.test(e.message) ? 'Você já faz parte deste cofre.' : 'Convite inválido, já usado ou expirado. Peça um novo link a quem convidou.');
+      throw e;
+    } finally { await DB.set('sync_invite', null); S.syInvited = false; }
+  }
+  async function syActivate(m) {
+    const vk = await Sigilo.vaultKeys(await Sigilo.unlockVaultSecret(m.wrapped_vault_key, SY.keys.encPrivate, m.vault_id));
+    SY.keys = { encPrivate: SY.keys.encPrivate, signPrivate: SY.keys.signPrivate, data: vk.data, rid: vk.rid };
+    const changed = SY.state.vault_id !== m.vault_id;
+    Object.assign(SY.state, { vault_id: m.vault_id, role: m.role, key_version: m.key_version, wrapped_vault_key: m.wrapped_vault_key, connected_at: nowIso() });
+    if (changed) Object.assign(SY.state, { cursor: 0, base: {}, conflicts: [] });
+    delete SY.state.removed;
+    await DB.set('sync_keys', SY.keys); await sySave();
+    await sySetPref({ ['vault_' + SY.state.user.id]: m.vault_id });
+  }
+  async function syCreateOwnVault(uid) {
+    const v = (await rest('vaults', { method: 'POST', body: { owner_id: uid }, headers: { Prefer: 'return=representation' } }))[0];
+    const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
+    const wrapped = await Sigilo.lockForMember(Sigilo.newVaultSecret(), me.enc_public_key, v.id);
+    await rest('vault_members', { method: 'POST', body: { vault_id: v.id, user_id: uid, role: 'owner', wrapped_vault_key: wrapped, key_version: 1, added_by: uid }, headers: { Prefer: 'return=minimal' } });
+    return { vault_id: v.id, role: 'owner', wrapped_vault_key: wrapped, key_version: 1 };
   }
 
   // Login ou cadastro. A senha nunca sai do aparelho: vai só a "prova" derivada dela.
@@ -4170,6 +4254,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       j = await nFetch('/auth/v1/signup', { method: 'POST', body: { email, password: pw.authSecret } });
       if (!j || !j.access_token) return { needsConfirm: true, email };
     } else j = await nFetch('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password: pw.authSecret } });
+    return syAfterAuth(j, email, pw);
+  }
+  // Depois de autenticado (login, cadastro ou recuperação): chaves, convite e cofre.
+  async function syAfterAuth(j, email, pw) {
     const uid = j.user.id;
     SY.state = { user: { id: uid, email }, session: sessOf(j), vault_id: null, cursor: 0, base: {}, conflicts: [], last_sync_at: null };
     SY.keys = null;
@@ -4177,31 +4265,90 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     let uk = (await rest('user_keys?select=*'))[0];
     if (!uk) {
       document.querySelectorAll('.toast').forEach(t => t.remove());
-      const keys = await Sigilo.newUserKeys(), pub = await Sigilo.publicKeys(keys), code = Sigilo.newRecoveryCode();
-      if (!(await showRecoveryCode(code))) { await syForget(); throw nErr('Cadastro cancelado antes de anotar a chave de recuperação. Nada foi enviado. Entre de novo para continuar.'); }
+      const keys = await Sigilo.newUserKeys(), pub = await Sigilo.publicKeys(keys), code = Sigilo.newRecoveryWords();
+      if (!(await showRecoveryWords(code))) { await syForget(); throw nErr('Cadastro interrompido antes de anotar as palavras de recuperação. Nada foi enviado. Entre de novo para continuar.'); }
       toast('Criando suas chaves…', null, null, 60000);
-      await rest('profiles', { method: 'POST', body: Object.assign({ user_id: uid }, pub), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      await rest('profiles', { method: 'POST', body: Object.assign({ user_id: uid, email }, pub), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
       await rest('user_keys', { method: 'POST', body: { user_id: uid, wrapped_private_keys: await Sigilo.lockPrivate(keys, pw.kek), recovery_wrapped_private_keys: await Sigilo.lockPrivate(keys, await Sigilo.recoveryKek(code)), kdf: pw.kdf }, headers: { Prefer: 'return=minimal' } });
       uk = (await rest('user_keys?select=*'))[0];
-    }
+    } else rest('profiles?user_id=eq.' + uid, { method: 'PATCH', body: { email }, headers: { Prefer: 'return=minimal' } }).catch(() => {});
     const priv = await Sigilo.unlockPrivate(uk.wrapped_private_keys, pw.kek);
+    SY.keys = { encPrivate: priv.encPrivate, signPrivate: priv.signPrivate };
+    await DB.set('sync_keys', SY.keys);
+    // Convite aberto neste aparelho? Aceita (fica aguardando a aprovação do dono).
+    let pend = null, inviteError = null;
+    try { pend = await syAcceptInvite(); } catch (e) { if (e.offline) throw e; inviteError = e.message; } // convite ruim não impede o login
+    pend = pend || (await syPref())['pending_' + uid] || null;
+    if (pend) SY.state.pending = pend;
     let mem = await rest('vault_members?select=vault_id,role,wrapped_vault_key,key_version&user_id=eq.' + uid);
+    if (SY.state.pending && mem.some(x => x.vault_id === SY.state.pending.vault_id)) { delete SY.state.pending; await sySetPref({ ['pending_' + uid]: null }); }
     let created = false;
     if (!mem.length) {
-      const v = (await rest('vaults', { method: 'POST', body: { owner_id: uid }, headers: { Prefer: 'return=representation' } }))[0];
-      const me = (await rest('profiles?select=enc_public_key&user_id=eq.' + uid))[0];
-      const wrapped = await Sigilo.lockForMember(Sigilo.newVaultSecret(), me.enc_public_key, v.id);
-      await rest('vault_members', { method: 'POST', body: { vault_id: v.id, user_id: uid, role: 'owner', wrapped_vault_key: wrapped, key_version: 1, added_by: uid }, headers: { Prefer: 'return=minimal' } });
-      mem = [{ vault_id: v.id, role: 'owner', wrapped_vault_key: wrapped, key_version: 1 }]; created = true;
+      if (SY.state.pending) { await sySave(); document.querySelectorAll('.toast').forEach(t => t.remove()); return { pending: true }; } // entrando num cofre de outra pessoa: não cria um próprio
+      mem = [await syCreateOwnVault(uid)]; created = true;
     }
-    const m = mem.find(x => x.role === 'owner') || mem[0];
-    const vk = await Sigilo.vaultKeys(await Sigilo.unlockVaultSecret(m.wrapped_vault_key, priv.encPrivate, m.vault_id));
-    SY.keys = { encPrivate: priv.encPrivate, signPrivate: priv.signPrivate, data: vk.data, rid: vk.rid };
-    Object.assign(SY.state, { vault_id: m.vault_id, role: m.role, key_version: m.key_version, wrapped_vault_key: m.wrapped_vault_key, connected_at: nowIso() });
-    await DB.set('sync_keys', SY.keys); await sySave();
+    const want = (await syPref())['vault_' + uid];
+    const m = mem.find(x => x.vault_id === want) || mem.find(x => x.role === 'owner') || mem[0];
+    await syActivate(m);
     document.querySelectorAll('.toast').forEach(t => t.remove());
-    return { created };
+    return { created, pending: !!SY.state.pending, inviteError };
   }
+
+  // ---------- Esqueci minha senha ----------
+  // 1) o servidor manda um link por e-mail; 2) o link volta ao app com uma sessão temporária;
+  // 3) a pessoa digita as 12 palavras e a senha nova; as chaves são retrancadas com a senha nova.
+  const appUrl = () => location.origin + location.pathname;
+  async function syRecoverStart(email) {
+    await nFetch('/auth/v1/recover?redirect_to=' + encodeURIComponent(appUrl()), { method: 'POST', body: { email: String(email).trim().toLowerCase() } });
+  }
+  async function syRecoverFinish(words, newPassword) {
+    await syLoad();
+    const r = S.syRecovery; if (!r) throw nErr('O link de recuperação expirou. Peça outro.');
+    const parsed = Sigilo.parseWords(words); if (parsed.error) throw nErr(parsed.error);
+    const user = await nFetch('/auth/v1/user', { auth: r.access_token });
+    const email = String(user.email).toLowerCase();
+    SY.state = { user: { id: user.id, email }, session: sessOf(r) }; await sySave();
+    const uk = (await rest('user_keys?select=*'))[0];
+    if (!uk) throw nErr('Esta conta ainda não tem dados protegidos. Entre normalmente e crie a senha.');
+    toast('Conferindo as palavras…', null, null, 60000);
+    const pw = await Sigilo.fromPassword(email, newPassword);
+    let novo; // erra aqui se as palavras não conferem; nesse caso nada é enviado ao servidor
+    try { novo = await Sigilo.relock(uk.recovery_wrapped_private_keys, await Sigilo.recoveryKek(parsed.words), pw.kek); }
+    catch (e) { throw nErr('As 12 palavras não conferem com as desta conta. Confira a ordem e a grafia.'); }
+    await rest('user_keys?user_id=eq.' + user.id, { method: 'PATCH', body: { wrapped_private_keys: novo, kdf: pw.kdf }, headers: { Prefer: 'return=minimal' } });
+    await nFetch('/auth/v1/user', { method: 'PUT', auth: await nToken(), body: { password: pw.authSecret } });
+    S.syRecovery = null;
+    const res = await syAfterAuth(Object.assign({}, r, { user: { id: user.id } }), email, pw);
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    return res;
+  }
+
+  // Quem pediu para entrar: confere se o dono já aprovou e, se sim, troca para o cofre compartilhado.
+  async function syCheckPending(manual, fromRun) {
+    await syLoad(); const st = SY.state;
+    if (!st || !st.pending || !st.session || !SY.keys) return false;
+    const mem = await rest(`vault_members?select=vault_id,role,wrapped_vault_key,key_version&vault_id=eq.${st.pending.vault_id}&user_id=eq.${st.user.id}`);
+    if (!mem.length) { if (manual) toast('Ainda aguardando a aprovação de ' + st.pending.owner_email); return false; }
+    const owner = st.pending.owner_email;
+    if (S.ds && Object.keys(S.ds).length) {
+      const juntar = await confirmDialog({ title: 'Acesso aprovado', text: `Você entrou no cofre de <b>${esc(owner)}</b>, mas este aparelho já tem dados.<br><br><b>Usar só os do cofre</b> (recomendado): os dados deste aparelho são trocados pelos do cofre; os atuais ficam numa cópia automática.<br><br><b>Juntar</b>: seus dados atuais são enviados para o cofre compartilhado e todos os membros passam a vê-los.`, ok: 'Juntar', cancel: 'Usar só os do cofre' });
+      if (!juntar) { await DB.saveWithBackup(makeBackup(S.ds, 'Antes de entrar no cofre de ' + owner), null, S.meta); S.ds = null; }
+    }
+    await syActivate(mem[0]);
+    delete st.pending; await sySetPref({ ['pending_' + st.user.id]: null }); await sySave();
+    toast('Acesso aprovado: agora vocês compartilham o mesmo cofre');
+    render();
+    if (!fromRun) await syRun(manual); // dentro de syRun a sincronização continua sozinha (evita esperar por si mesma)
+    return true;
+  }
+  // Volta para um cofre só seu (depois de sair ou ser removido de um compartilhado).
+  async function syUseOwn() {
+    await syLoad(); const uid = SY.state.user.id;
+    const mem = await rest('vault_members?select=vault_id,role,wrapped_vault_key,key_version&user_id=eq.' + uid + '&role=eq.owner');
+    await syActivate(mem[0] || await syCreateOwnVault(uid));
+    toast('Sincronizando com um cofre só seu'); render(); await syRun(true);
+  }
+
 
   // Baixa, junta e envia. Sem conexão: tenta de novo depois, sem perder nada.
   let syRunning = null, syTimer = null;
@@ -4210,10 +4357,23 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (syRunning) return syRunning;
     syRunning = (async () => {
       await syLoad();
+      if (SY.state && SY.state.pending && SY.state.session && SY.keys) { try { await syCheckPending(manual, true); } catch (e) { /* tenta depois */ } }
       if (!syReady()) { if (manual) go('mais', 'sync'); return; }
       const st = SY.state, V = st.vault_id, kv = st.key_version || 1;
       if (manual) toast('Sincronizando…', null, null, 60000);
       try {
+        const eu = await rest(`vault_members?select=role&vault_id=eq.${V}&user_id=eq.${st.user.id}`);
+        if (!eu.length) { // o dono removeu este acesso: para de sincronizar, sem apagar nada daqui
+          st.removed = { vault_id: V, at: nowIso() }; st.vault_id = null; await sySave();
+          document.querySelectorAll('.toast').forEach(t => t.remove());
+          toast('Seu acesso ao cofre compartilhado foi removido'); render(); return;
+        }
+        st.role = eu[0].role;
+        if (st.role === 'owner') {
+          const reqs = await rest(`vault_invites?select=id&vault_id=eq.${V}&status=eq.accepted`);
+          if (reqs.length && reqs.length !== st.requests) toast(`${reqs.length} pessoa(s) pedindo para entrar no cofre`, 'Ver', () => go('mais', 'sync'), 6000);
+          st.requests = reqs.length;
+        }
         const signOf = {};
         (await rest('profiles?select=user_id,sign_public_key')).forEach(p => { signOf[p.user_id] = p.sign_public_key; });
         // 1) baixar o que mudou desde a última vez
@@ -4272,19 +4432,45 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function pageSync() {
     const st = SY && SY.state;
     let h = backBar('Mais', 'mais') + `<h1 class="page-title">Sincronização <span class="badge">beta</span></h1>`;
+    const logged = st && st.session && SY.keys;
+    if (logged && st.pending && !st.vault_id) return h + pendingCard(st.pending) + `<button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Cancelar e sair</button>`;
+    if (logged && st.removed && !st.vault_id) return h + `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Seu acesso ao cofre compartilhado foi removido</b> em ${fdatetime(st.removed.at)}. Os dados que já estavam neste aparelho continuam aqui, mas não sincronizam mais com aquele cofre.</div></div>
+      <button class="btn" data-act="sy-own">Sincronizar com um cofre só meu</button><button class="btn ghost" data-act="sy-logout">Sair da conta neste aparelho</button>`;
+    if (S.syRecovery) {
+      return h + `<div class="card"><div class="lbl">Criar senha nova</div>
+        <p class="small" style="margin:4px 0 12px">Digite as <b>12 palavras de recuperação</b> que você anotou no cadastro e escolha a senha nova.</p>
+        <div class="field"><label for="sy-words">12 palavras</label><textarea class="input" id="sy-words" rows="3" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="abacate abaixo …"></textarea><p class="help">Na ordem, separadas por espaço. Acentos e maiúsculas não importam.</p></div>
+        ${pwField('sy-pw', 'Senha nova', 'new-password')}
+        <div id="sy-err" class="small" style="color:var(--danger)"></div>
+        <button class="btn" data-act="sy-recover-finish">Salvar senha nova e entrar</button></div>
+        <p class="help">Perdeu as palavras também? Se outra pessoa divide o cofre com você, peça para ela te convidar de novo numa conta nova. Se não, seus dados continuam só nos aparelhos onde você já estava conectado e nos backups exportados.</p>`;
+    }
     if (!syReady()) {
-      const sign = S.syMode === 'signup';
-      if (st && st.user && !st.session) h += `<div class="notice warn">${ic('alert')}<div class="ntext">A sessão de <b>${esc(st.user.email)}</b> expirou. Entre de novo para voltar a sincronizar.</div></div>`;
-      h += `<p class="small muted">Mantém seus dados iguais no celular e no computador. Tudo é <b>embaralhado neste aparelho</b> antes de sair: o servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</p>
-        <div class="card">
-          <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc((st && st.user && st.user.email) || S.syEmail || '')}"></div>
-          <div class="field"><label for="sy-pw">Senha</label><input class="input" id="sy-pw" type="password" autocomplete="${sign ? 'new-password' : 'current-password'}"></div>
-          ${sign ? `<div class="field"><label for="sy-pw2">Repita a senha</label><input class="input" id="sy-pw2" type="password" autocomplete="new-password"></div><p class="help">Mínimo de 10 caracteres. Uma frase que você não esqueça é melhor que uma senha curta e complicada.</p>` : ''}
+      if (S.syInvited && !S.syMode) S.syMode = 'signup';
+      const mode = S.syMode || 'login', sign = mode === 'signup';
+      if (S.syLinkMsg) h += `<div class="notice ${S.syLinkMsg.ok ? 'ok' : 'warn'}">${ic(S.syLinkMsg.ok ? 'check' : 'alert')}<div class="ntext">${esc(S.syLinkMsg.text)}</div></div>`;
+      if (st && st.user && !st.session) h += `<div class="notice warn">${ic('alert')}<div class="ntext">Sua sessão terminou. Entre de novo para voltar a sincronizar.</div></div>`;
+      if (S.syInvited) h += `<div class="notice ok">${ic('check')}<div class="ntext"><b>Você recebeu um convite.</b> ${sign ? 'Crie sua conta' : 'Entre'} para aceitar.</div></div>`;
+      const email = esc((st && st.user && st.user.email) || S.syEmail || '');
+      if (mode === 'forgot') return h + `<div class="card"><div class="lbl">Esqueci minha senha</div>
+          <p class="small" style="margin:4px 0 12px">Vamos mandar um link para o seu e-mail. Depois você vai precisar das <b>12 palavras de recuperação</b>.</p>
+          <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${email}"></div>
+          <div id="sy-err" class="small" style="color:var(--danger)"></div>
+          <button class="btn" data-act="sy-forgot-send">Enviar link</button>
+          <button class="btn ghost" data-act="sy-mode" data-mode="login">Voltar para entrar</button></div>`;
+      h += `<div class="card"><div class="lbl">${sign ? 'Criar conta' : 'Entrar'}</div>
+          <p class="small muted" style="margin:4px 0 12px">${sign ? 'Para usar o Cofre no celular e no computador, ou com outra pessoa.' : 'Use o mesmo e-mail e senha dos seus outros aparelhos.'}</p>
+          <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${email}"></div>
+          ${pwField('sy-pw', 'Senha', sign ? 'new-password' : 'current-password')}
+          ${sign ? '<p class="help" style="margin-top:-6px">Pelo menos 8 caracteres.</p>' : ''}
           <div id="sy-err" class="small" style="color:var(--danger)"></div>
           <button class="btn" data-act="sy-go">${sign ? 'Criar conta' : 'Entrar'}</button>
-          <button class="btn ghost" data-act="sy-mode">${sign ? 'Já tenho conta: entrar' : 'Ainda não tenho conta: criar'}</button>
-        </div>
-        <div class="notice info">${ic('info')}<div class="ntext"><b>Sem volta se perder a senha e a chave de recuperação.</b> No cadastro, o app mostra uma chave de recuperação para você anotar. Como nem o servidor consegue ler seus dados, não existe "esqueci a senha" sem essa chave. Por enquanto, a recuperação pela chave ainda não tem tela no app: guarde também um backup exportado.</div></div>`;
+          ${sign ? '' : '<button class="btn ghost" data-act="sy-mode" data-mode="forgot">Esqueci minha senha</button>'}
+          <button class="btn ghost" data-act="sy-mode" data-mode="${sign ? 'login' : 'signup'}">${sign ? 'Já tenho conta' : 'Criar conta'}</button></div>
+        <details class="card fold"><summary class="small">Como meus dados ficam protegidos?</summary><ul class="small" style="padding-left:18px;margin:10px 0 0;display:grid;gap:6px">
+          <li>Tudo é <b>embaralhado neste aparelho</b> antes de sair. O servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</li>
+          <li>Sua senha não vai para o servidor: vai só uma prova derivada dela.</li>
+          <li>No cadastro você recebe <b>12 palavras de recuperação</b>. Elas são o único jeito de criar senha nova se você esquecer a atual.</li></ul></details>`;
       return h;
     }
     const conf = st.conflicts || [];
@@ -4294,15 +4480,124 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
         ${st.bad_records ? `<div class="notice danger" style="margin:12px 0 0">${ic('alert')}<div class="ntext"><b>${st.bad_records} registro(s) recusado(s)</b>: assinatura ou conteúdo não confere. Eles não foram aplicados. Se isso se repetir, avise: pode ser falha ou adulteração no servidor.</div></div>` : ''}
         <button class="btn" data-act="sy-now" style="margin-top:12px">${ic('db')} Sincronizar agora</button></div>`;
+    if (st.pending) h += pendingCard(st.pending);
+    if (S.syInvited) h += `<div class="notice ok">${ic('check')}<div class="ntext"><b>Você abriu um convite</b> para o cofre de outra pessoa. Enquanto o dono não aprovar, você continua sincronizando o seu.<br><button class="btn" data-act="sy-accept" style="margin-top:10px">Aceitar convite</button></div></div>`;
+    h += `<div class="section-title"><span>Pessoas com acesso</span></div><div id="sy-people" class="card"><div class="muted small">Carregando…</div></div>`;
+    setTimeout(syFillPeople, 0);
     if (conf.length) h += `<div class="section-title"><span>Conflitos (${conf.length})</span></div><div class="card"><p class="small muted" style="margin-top:0">O mesmo item foi alterado aqui e em outro aparelho. Ficou a versão <b>deste aparelho</b>; a outra está guardada abaixo para consulta.</p>${conf.slice().reverse().map(c => `<details class="fold" style="margin-top:8px"><summary class="small">${esc(conflictLabel(c))} · ${fdatetime(c.at)}</summary><div style="margin-top:8px">${renderValue(c.remote.item !== undefined ? c.remote.item : c.remote.value)}</div></details>`).join('')}<button class="btn ghost" data-act="sy-clear-conf">Limpar lista de conflitos</button></div>`;
     h += `<div class="card"><div class="lbl">Como funciona</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
         <li>Sincroniza sozinho ao abrir o app, ao voltar para ele e alguns segundos depois de cada alteração.</li>
         <li>Sem internet, tudo continua funcionando; envia quando a conexão voltar.</li>
         <li>Comprovantes (imagens) não sincronizam, só a lista deles.</li>
-        <li>Convidar outra pessoa (ex.: esposa) chega na próxima etapa.</li></ul></div>
+        <li>Pessoas convidadas veem e (se puderem editar) alteram os mesmos dados que você.</li></ul></div>
       <button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Sair da conta neste aparelho</button>
       <p class="help">Sair não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
     return h;
+  }
+  function pwField(id, label, autocomplete) {
+    return `<div class="field"><label for="${id}">${label}</label><div style="position:relative"><input class="input" id="${id}" type="password" autocomplete="${autocomplete}" style="padding-right:84px">
+      <button type="button" class="link" data-act="pw-toggle" data-id="${id}" style="position:absolute;right:12px;top:50%;transform:translateY(-50%)">mostrar</button></div></div>`;
+  }
+  function pendingCard(p) {
+    return `<div class="card"><div class="lbl">Aguardando aprovação</div>
+      <p class="small" style="margin:4px 0 10px">Você pediu para entrar no cofre de <b>${esc(p.owner_email)}</b> (${p.role === 'viewer' ? 'só ver' : 'pode editar'}). Mostre este código para a pessoa: ela só deve aprovar se aparecer <b>o mesmo número</b> no celular dela.</p>
+      <div style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;margin:8px 0 14px" class="num">${esc(p.code)}</div>
+      <button class="btn" data-act="sy-check">Já aprovou? Verificar agora</button></div>`;
+  }
+  let syPeople = null;
+  async function syFillPeople() {
+    const el = document.getElementById('sy-people'); if (!el || !syReady()) return;
+    const st = SY.state, V = st.vault_id, owner = st.role === 'owner';
+    try {
+      const [mem, profs, invs] = await Promise.all([
+        rest(`vault_members?select=user_id,role,created_at&vault_id=eq.${V}`),
+        rest('profiles?select=user_id,email,enc_public_key'),
+        owner ? rest(`vault_invites?select=id,role,status,accepted_by,expires_at,created_at&vault_id=eq.${V}&status=in.(pending,accepted)&order=created_at.desc`) : Promise.resolve([])
+      ]);
+      const prof = {}; profs.forEach(x => { prof[x.user_id] = x; });
+      const myPub = prof[st.user.id] && prof[st.user.id].enc_public_key;
+      syPeople = { mem, prof, invs, myPub };
+      const roleName = r => r === 'owner' ? 'Dono' : r === 'editor' ? 'Pode editar' : 'Só vê';
+      let h = '';
+      const reqs = invs.filter(i => i.status === 'accepted' && i.accepted_by && prof[i.accepted_by]);
+      for (const i of reqs) {
+        const who = prof[i.accepted_by];
+        h += `<div class="notice warn" style="margin:0 0 12px">${ic('alert')}<div class="ntext"><b>${esc(who.email || 'Alguém')}</b> quer entrar (${roleName(i.role).toLowerCase()}). Confira o código com a pessoa antes de aprovar.
+          <div class="btn-row" style="margin-top:10px"><button class="btn secondary" data-act="sy-refuse" data-id="${esc(i.id)}">Recusar</button><button class="btn" data-act="sy-approve" data-id="${esc(i.id)}">Conferir código</button></div></div></div>`;
+      }
+      h += '<div class="rows">' + mem.sort((a, b) => (a.role === 'owner' ? -1 : b.role === 'owner' ? 1 : 0)).map(m => {
+        const me = m.user_id === st.user.id, mail = (prof[m.user_id] || {}).email || 'membro';
+        const acts = owner && !me ? `<div style="display:flex;gap:6px;width:100%;padding-left:52px;margin-top:6px"><button class="chip" data-act="sy-role" data-id="${esc(m.user_id)}" data-role="${m.role === 'editor' ? 'viewer' : 'editor'}">${m.role === 'editor' ? 'Mudar para só ver' : 'Deixar editar'}</button><button class="chip" data-act="sy-remove" data-id="${esc(m.user_id)}" style="color:var(--danger)">Remover</button></div>` : '';
+        return `<div class="row-item" style="flex-wrap:wrap"><div class="ico">${m.role === 'owner' ? '👑' : '👤'}</div><div class="main"><div class="t" style="word-break:break-all">${esc(mail)}${me ? ' (você)' : ''}</div><div class="s">${roleName(m.role)}</div></div>${acts}</div>`;
+      }).join('') + '</div>';
+      const open = invs.filter(i => i.status === 'pending' && Date.parse(i.expires_at) > Date.now());
+      if (open.length) h += `<div class="small muted" style="margin-top:10px">Convites ainda não usados: ${open.map(i => `${roleName(i.role).toLowerCase()} · expira ${fdatetime(i.expires_at)} <button class="link" data-act="sy-cancel-inv" data-id="${esc(i.id)}">cancelar</button>`).join(' · ')}</div>`;
+      if (owner) h += `<button class="btn secondary" data-act="sy-invite" style="margin-top:12px">${ic('plus')} Convidar pessoa</button>`;
+      else h += `<button class="btn ghost" data-act="sy-leave" style="margin-top:12px;color:var(--danger)">Sair deste cofre compartilhado</button>`;
+      el.innerHTML = h;
+    } catch (e) { el.innerHTML = `<div class="muted small">${esc(e.friendly ? e.message : 'Não foi possível carregar as pessoas.')}</div>`; }
+  }
+  async function syInvite() {
+    const sh = openSheet({
+      title: 'Convidar pessoa',
+      body: `<p class="small" style="margin-top:0">A pessoa recebe um link, cria a conta dela e pede para entrar. Você confere um código de 6 dígitos com ela e aprova.</p>
+        <label class="radio-card"><input type="radio" name="inv-role" value="editor" checked><div><b>Pode editar</b><div class="small muted">Vê tudo e lança, edita e exclui, como você.</div></div></label>
+        <label class="radio-card"><input type="radio" name="inv-role" value="viewer"><div><b>Só vê</b><div class="small muted">Vê saldos, contas e lançamentos, mas não altera nada.</div></div></label>`,
+      footHtml: `<button class="btn" data-ok>Criar link de convite</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const role = sh.body.querySelector('input[name=inv-role]:checked').value;
+      sh.close();
+      try {
+        const tok = Sigilo.b64.enc(crypto.getRandomValues(new Uint8Array(24))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const st = SY.state;
+        await rest('vault_invites', { method: 'POST', body: { vault_id: st.vault_id, created_by: st.user.id, role, token_hash: hexOf(await Sigilo.sha256(tok)) }, headers: { Prefer: 'return=minimal' } });
+        const link = location.origin + location.pathname + '#convite=' + tok;
+        const s2 = openSheet({
+          title: 'Link de convite',
+          body: `<p class="small" style="margin-top:0">Mande este link só para a pessoa convidada. Vale por <b>48 horas</b> e funciona <b>uma vez</b>. Quem abrir o link ainda precisa da sua aprovação com o código.</p>
+            <input class="input" id="inv-link" readonly value="${esc(link)}" style="font-size:13px">
+            <p class="help">Depois que ela entrar, volte aqui em Sincronização: vai aparecer o pedido dela.</p>`,
+          footHtml: `<div class="btn-row"><button class="btn secondary" data-copy>Copiar</button><button class="btn" data-share>Compartilhar</button></div>`
+        });
+        s2.foot.querySelector('[data-copy]').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Link copiado'); } catch (e) { const i = s2.body.querySelector('#inv-link'); i.select(); toast('Selecione e copie o link'); } };
+        s2.foot.querySelector('[data-share]').onclick = async () => { try { await navigator.share({ title: 'Convite para o Cofre', text: 'Convite para compartilharmos o Cofre (finanças):', url: link }); } catch (e) { if (e.name !== 'AbortError') s2.foot.querySelector('[data-copy]').click(); } };
+        syFillPeople();
+      } catch (e) { showError('Convite', esc(e.friendly ? e.message : 'Erro inesperado: ' + e.message)); }
+    };
+  }
+  async function syApprove(id) {
+    const P = syPeople; const i = P && P.invs.find(x => x.id === id); if (!i) return;
+    const who = P.prof[i.accepted_by]; const st = SY.state;
+    const code = await Sigilo.safetyCode(P.myPub, who.enc_public_key);
+    const ok = await confirmDialog({ title: 'Conferir código', text: `Pergunte a <b>${esc(who.email || 'pessoa')}</b> qual código aparece no celular dela. Só aprove se for exatamente:<div class="num" style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;margin:14px 0">${esc(code)}</div>Se for diferente, <b>recuse</b>: alguém pode estar tentando se passar por ela.`, ok: 'É igual: aprovar', cancel: 'Voltar' });
+    if (!ok) return;
+    try {
+      const secret = await Sigilo.unlockVaultSecret(st.wrapped_vault_key, SY.keys.encPrivate, st.vault_id);
+      const wrapped = await Sigilo.lockForMember(secret, who.enc_public_key, st.vault_id);
+      await rest('vault_members', { method: 'POST', body: { vault_id: st.vault_id, user_id: i.accepted_by, role: i.role, wrapped_vault_key: wrapped, key_version: st.key_version || 1, added_by: st.user.id }, headers: { Prefer: 'return=minimal' } });
+      await rest('vault_invites?id=eq.' + i.id, { method: 'PATCH', body: { status: 'approved' }, headers: { Prefer: 'return=minimal' } });
+      toast((who.email || 'A pessoa') + ' agora tem acesso'); syFillPeople();
+    } catch (e) { showError('Aprovação', esc(e.friendly ? e.message : 'Erro inesperado: ' + e.message)); }
+  }
+  async function syInviteStatus(id, status, msg) {
+    try { await rest('vault_invites?id=eq.' + id, { method: 'PATCH', body: { status }, headers: { Prefer: 'return=minimal' } }); toast(msg); syFillPeople(); }
+    catch (e) { showError('Convite', esc(e.friendly ? e.message : e.message)); }
+  }
+  async function syMemberRole(uid, role) {
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${uid}`, { method: 'PATCH', body: { role }, headers: { Prefer: 'return=minimal' } }); toast(role === 'viewer' ? 'Agora só vê' : 'Agora pode editar'); syFillPeople(); }
+    catch (e) { showError('Permissão', esc(e.message)); }
+  }
+  async function syRemoveMember(uid) {
+    const mail = ((syPeople && syPeople.prof[uid]) || {}).email || 'esta pessoa';
+    if (!(await confirmDialog({ title: 'Remover acesso?', text: `<b>${esc(mail)}</b> deixa de receber o que for lançado daqui para frente.<br><br>Seja realista: o que ela já viu ou já tem no aparelho dela <b>não dá para apagar</b>, por nenhum sistema.`, ok: 'Remover', danger: true }))) return;
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${uid}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }); toast('Acesso removido'); syFillPeople(); }
+    catch (e) { showError('Remover', esc(e.message)); }
+  }
+  async function syLeave() {
+    if (!(await confirmDialog({ title: 'Sair do cofre compartilhado?', text: 'Você para de ver e de sincronizar este cofre. Os dados que já estão neste aparelho continuam aqui. Para voltar, a pessoa dona precisa convidar de novo.', ok: 'Sair do cofre', danger: true }))) return;
+    try { await rest(`vault_members?vault_id=eq.${SY.state.vault_id}&user_id=eq.${SY.state.user.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }); await syUseOwn(); }
+    catch (e) { showError('Sair', esc(e.message)); }
   }
   function conflictLabel(c) {
     const r = c.remote || {}, k = r.c || r.k || c.key.replace(/^[@#]/, '').split(':')[0];
@@ -4315,8 +4610,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const email = v('sy-email').trim(), pw = v('sy-pw'), sign = S.syMode === 'signup';
     S.syEmail = email;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Confira o e-mail.');
-    if (pw.length < 10) return err('A senha precisa ter pelo menos 10 caracteres.');
-    if (sign && pw !== v('sy-pw2')) return err('As senhas não são iguais.');
+    if (pw.length < 8) return err('A senha precisa ter pelo menos 8 caracteres.');
     try {
       const r = await syConnect(sign ? 'signup' : 'login', email, pw);
       document.querySelectorAll('.toast').forEach(t => t.remove());
@@ -4325,6 +4619,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         openSheet({ title: 'Confirme seu e-mail', body: `<p>Enviamos um link para <b>${esc(r.email)}</b>. Abra o e-mail, toque no link e depois volte aqui e toque em <b>Entrar</b> com a mesma senha.</p><p class="small muted">Não chegou? Veja a caixa de spam. O link pode abrir uma página de erro: isso é normal por enquanto, a confirmação vale mesmo assim.</p>`, footHtml: '<button class="btn" data-close>Entendi</button>' });
         return;
       }
+      if (r.pending && !syReady()) { render(); return; } // aguardando a aprovação do dono (a tela mostra o código)
+      if (r.inviteError) showError('Convite', esc(r.inviteError));
       // Este aparelho já tinha dados e o cofre já existia: juntar ou usar só os da nuvem?
       if (!r.created && S.ds && Object.keys(S.ds).length) {
         const keep = await confirmDialog({ title: 'Este aparelho já tem dados', text: 'Sua conta já tem dados na nuvem. <b>Juntar</b> mantém os dois (itens iguais não duplicam; se o mesmo item for diferente, fica o deste aparelho e o outro vai para "Conflitos").<br><br><b>Usar só os da nuvem</b> troca os dados deste aparelho pelos da nuvem (uma cópia automática dos atuais é guardada antes).', ok: 'Juntar', cancel: 'Usar só os da nuvem' });
@@ -4359,50 +4655,106 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     set.delete(C.mainCurrency(ds));
     return Array.from(set).sort();
   }
+  // ---------- cotação automática ----------
+  // Tabela pública diária (fawazahmed0/currency-api, publicada no npm e servida pelo jsDelivr; espelho de reserva).
+  // Ela traz TODAS as moedas: o serviço não fica sabendo quais você tem nem quanto. Fica neste aparelho (não sincroniza).
+  const FX_URLS = cur => [`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${cur}.min.json`, `https://latest.currency-api.pages.dev/v1/currencies/${cur}.min.json`];
+  const FX_MAX_AGE = 6 * 3600e3;
+  let fxBusy = null;
+  const fxOn = ds => !(ds && ds.settings && ds.settings.auto_rates === false);
+  async function fxLoadCache() {
+    try { const c = await DB.get('fx_cache'); if (c && c.data) C.setAutoRates(c.main, c.date, c.data); return c || null; } catch (e) { return null; }
+  }
+  // force: ignora o intervalo de 6 h. Devolve true se a tabela mudou.
+  function fxRefresh(force) {
+    if (fxBusy) return fxBusy;
+    fxBusy = (async () => {
+      if (!S.ds || !fxOn(S.ds)) return false;
+      const main = C.mainCurrency(S.ds), cur = main.toLowerCase();
+      let cache = null; try { cache = await DB.get('fx_cache'); } catch (e) { cache = null; }
+      if (!force && cache && cache.main === main && Date.now() - cache.fetched_at < FX_MAX_AGE) return false;
+      let lastErr = null;
+      for (const url of FX_URLS(cur)) {
+        try {
+          const r = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const j = await r.json();
+          const data = j && j[cur];
+          if (!j || typeof j.date !== 'string' || !data || typeof data !== 'object' || !(Object.values(data).filter(v => v > 0).length > 20)) throw new Error('tabela inválida');
+          const novo = { main, date: j.date, data, fetched_at: Date.now(), source: url.includes('jsdelivr') ? 'jsDelivr' : 'espelho' };
+          await DB.set('fx_cache', novo);
+          C.setAutoRates(main, j.date, data);
+          S.fxError = null;
+          return !cache || cache.date !== j.date || cache.main !== main;
+        } catch (e) { lastErr = e; }
+      }
+      S.fxError = navigator.onLine === false || (lastErr && lastErr.name === 'TypeError') ? 'sem conexão com o serviço de cotação' : 'o serviço de cotação respondeu com erro';
+      return false;
+    })().then(changed => { if (changed || S.page === 'moedas') render(); return changed; }).finally(() => { fxBusy = null; });
+    return fxBusy;
+  }
+  function fmtRate(v, cur) {
+    const d = v >= 100 ? 2 : v >= 1 ? 4 : 6;
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: cur, minimumFractionDigits: 2, maximumFractionDigits: d }).format(v).replace(/\s/g, ' ');
+  }
   function pageMoedas() {
-    const ds = S.ds, MC = C.mainCurrency(ds), rates = (ds.settings && ds.settings.exchange_rates) || {};
-    const used = currenciesInUse(ds);
+    const ds = S.ds, MC = C.mainCurrency(ds), used = currenciesInUse(ds), auto = C.autoRatesState(), on = fxOn(ds);
     let h = backBar('Mais', 'mais') + `<h1 class="page-title">Moedas e câmbio</h1>
       <div class="card"><div class="lbl">Moeda principal</div>
         <div style="font-size:20px;font-weight:700;margin:2px 0 4px">${esc(MC)} · ${esc(curName(MC))}</div>
         <p class="small muted" style="margin:0 0 10px">O patrimônio total e os resumos aparecem nesta moeda. Contas em outras moedas são convertidas pela cotação abaixo.</p>
         <button class="btn secondary" data-act="cur-main">Trocar moeda principal</button></div>
-      <div class="section-title"><span>Cotações</span></div>`;
-    if (!used.length) h += `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
-    else {
-      h += `<div class="card">` + used.map(c => {
-        const r = rates[c]; const v = C.num(r && typeof r === 'object' ? r.rate : r);
-        return `<div class="field"><label for="rate-${c}">1 ${esc(c)} (${esc(curName(c))}) vale quantos ${esc(MC)}?</label>
-          <input class="input num" id="rate-${c}" data-rate="${c}" inputmode="decimal" placeholder="ex.: 6,20" value="${v > 0 ? esc(String(v).replace('.', ',')) : ''}">
-          <p class="help">${v > 0 ? 'Atualizada em ' + (r && r.updated_at ? fdatetime(r.updated_at) : 'data desconhecida') : '<b style="color:var(--warn)">Sem cotação:</b> esta moeda fica fora do patrimônio total.'}</p></div>`;
-      }).join('') + `<button class="btn" data-act="rates-save">${ic('check')} Salvar cotações</button>
-        <p class="help" style="margin-top:10px">O app não busca cotação na internet: você digita. Use a do seu banco ou corretora (é a que vale para você). Deixe em branco para tirar a moeda do total.</p></div>`;
-    }
+      <div class="section-title"><span>Cotações</span></div>
+      <div class="card"><label class="check" style="padding-top:0"><input type="checkbox" data-act="fx-toggle" ${on ? 'checked' : ''}><div><b>Atualizar automaticamente</b><div class="small muted">${on ? (auto.main === MC && auto.date ? `Cotações de ${esc(fdate(auto.date))}. O app confere de novo a cada 6 horas.` : 'Ainda não baixou a tabela de cotações.') : 'Desligado: só valem as cotações que você fixar.'}${on && S.fxError ? ` <span style="color:var(--warn)">Última tentativa falhou: ${esc(S.fxError)}${auto.date ? '; usando a tabela anterior' : ''}.</span>` : ''}</div></div></label>
+        ${on ? `<button class="btn secondary" data-act="fx-now">Atualizar agora</button>` : ''}</div>`;
+    if (!used.length) return h + `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
+    h += `<div class="card"><div class="rows">` + used.map(c => {
+      const info = C.rateInfo(ds, c);
+      const tag = info.source === 'fixada' ? '<span class="badge gold">fixada por você</span>' : info.source === 'automatica' ? '<span class="badge">automática</span>' : info.source === 'digitada' ? '<span class="badge">digitada</span>' : '<span class="badge warn">sem cotação</span>';
+      const btn = info.source === 'fixada' ? `<button class="chip" data-act="fx-unfix" data-cur="${c}">Usar automática</button>` : `<button class="chip" data-act="fx-fix" data-cur="${c}">Fixar valor</button>`;
+      return `<div class="row-item" style="flex-wrap:wrap"><div class="ico">${esc(c)}</div><div class="main"><div class="t">${info.rate ? `1 ${esc(c)} = ${esc(fmtRate(info.rate, MC))}` : esc(curName(c))}</div><div class="s">${tag}${info.source === 'fixada' && info.date ? ' desde ' + esc(fdate(info.date)) : ''}${!info.rate ? ' fica fora do patrimônio total' : ''}</div></div>
+        <div style="width:100%;padding-left:52px;margin-top:6px">${btn}</div></div>`;
+    }).join('') + `</div><p class="help" style="margin-top:10px"><b>Fixar valor</b> serve para usar a cotação que o seu banco ou corretora cobrou. A cotação fixada vale até você voltar para a automática.</p></div>
+      <p class="tiny muted">Fonte da cotação automática: tabela pública diária <i>currency-api</i>, baixada pelo jsDelivr. Ela traz todas as moedas de uma vez, então o serviço não sabe quais você tem nem quanto.</p>`;
     return h;
   }
-  async function saveRates() {
-    const ds2 = C.clone(S.ds), now = nowIso();
+  function fixRate(cur) {
+    const MC = C.mainCurrency(S.ds), now = C.rateInfo(S.ds, cur);
+    const sh = openSheet({
+      title: 'Fixar cotação de ' + cur,
+      body: `<div class="field"><label for="fx-val">1 ${esc(cur)} vale quantos ${esc(MC)}?</label><input class="input num" id="fx-val" inputmode="decimal" placeholder="ex.: 5,40" value="${now.rate ? esc(String(C.round2(now.rate * 10000) / 10000).replace('.', ',')) : ''}"></div>
+        <p class="help">Enquanto estiver fixada, a cotação automática não muda este valor.</p><div id="fx-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<button class="btn" data-ok>Fixar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const v = C.num(sh.body.querySelector('#fx-val').value.trim());
+      if (!(v > 0)) { sh.body.querySelector('#fx-err').textContent = 'Use um número maior que zero, ex.: 5,40.'; return; }
+      sh.close();
+      const ds2 = C.clone(S.ds);
+      ds2.settings = Object.assign({}, ds2.settings || {});
+      ds2.settings.exchange_rates = Object.assign({}, ds2.settings.exchange_rates || {}, { [cur]: { rate: v, fixed: true, updated_at: nowIso() } });
+      await commit(ds2, { audit: { type: 'exchange-rates', description: `Cotação fixada: 1 ${cur} = ${String(v).replace('.', ',')} ${MC}` }, toast: 'Cotação fixada' });
+    };
+  }
+  async function unfixRate(cur) {
+    const ds2 = C.clone(S.ds);
     ds2.settings = Object.assign({}, ds2.settings || {});
-    const rates = Object.assign({}, ds2.settings.exchange_rates || {});
-    const changed = [];
-    for (const inp of document.querySelectorAll('[data-rate]')) {
-      const c = inp.dataset.rate, raw = inp.value.trim();
-      const old = rates[c] && typeof rates[c] === 'object' ? C.num(rates[c].rate) : C.num(rates[c]);
-      if (!raw) { if (rates[c] !== undefined) { delete rates[c]; changed.push(c + ' removida'); } continue; }
-      const v = C.num(raw);
-      if (!(v > 0)) { showError('Cotação inválida', `Confira o valor de <b>${esc(c)}</b>. Use número maior que zero, ex.: 6,20.`); return; }
-      if (v !== old) { rates[c] = { rate: v, updated_at: now }; changed.push(`1 ${c} = ${String(v).replace('.', ',')} ${C.mainCurrency(ds2)}`); }
-    }
-    if (!changed.length) { toast('Nenhuma cotação mudou'); return; }
-    ds2.settings.exchange_rates = rates;
-    await commit(ds2, { audit: { type: 'exchange-rates', description: 'Cotações: ' + changed.join('; ') }, toast: 'Cotações salvas' });
+    const r = Object.assign({}, ds2.settings.exchange_rates || {}); delete r[cur]; ds2.settings.exchange_rates = r;
+    await commit(ds2, { audit: { type: 'exchange-rates', description: `Cotação de ${cur} voltou para a automática` }, toast: cur + ': cotação automática' });
+  }
+  async function toggleAutoRates(on) {
+    const ds2 = C.clone(S.ds);
+    ds2.settings = Object.assign({}, ds2.settings || {}, { auto_rates: !!on });
+    if (!on) { try { await DB.set('fx_cache', null); } catch (e) { /* ignora */ } C.setAutoRates(null, null, {}); }
+    await commit(ds2, { audit: { type: 'exchange-rates', description: on ? 'Cotação automática ligada' : 'Cotação automática desligada' }, toast: on ? 'Cotação automática ligada' : 'Cotação automática desligada' });
+    if (on) fxRefresh(true);
   }
   function changeMainCurrency() {
     const MC = C.mainCurrency(S.ds);
     const sh = openSheet({
       title: 'Moeda principal',
       body: `<div class="field"><label for="mc-sel">Mostrar totais em</label><select class="input" id="mc-sel">${currencyOptions(MC)}</select></div>
-        <div class="notice warn">${ic('alert')}<div class="ntext">As cotações são relativas à moeda principal. Ao trocar, <b>todas as cotações são apagadas</b> e você digita de novo. Saldos e lançamentos não mudam.</div></div>`,
+        <div class="notice info">${ic('info')}<div class="ntext">A cotação automática se ajusta sozinha à nova moeda. As cotações que você <b>fixou</b> são apagadas (eram relativas à moeda antiga). Saldos e lançamentos não mudam.</div></div>`,
       footHtml: `<button class="btn" data-ok>Trocar</button>`
     });
     sh.foot.querySelector('[data-ok]').onclick = async () => {
@@ -4411,7 +4763,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (v === MC) return;
       const ds2 = C.clone(S.ds);
       ds2.settings = Object.assign({}, ds2.settings || {}, { main_currency: v, exchange_rates: {} });
-      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações zeradas)` }, toast: 'Moeda principal: ' + v });
+      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações fixadas apagadas)` }, toast: 'Moeda principal: ' + v });
+      fxRefresh(true);
     };
   }
 
@@ -4465,7 +4818,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       sh.close();
       const desc = acc ? `Conta editada: ${a.name}` : `Conta cadastrada: ${a.name} (${a.currency})`;
       await commit(ds2, { audit: { type: acc ? 'account-edit' : 'account-create', description: desc + (bal === null ? '' : ` · saldo ${money(a.snapshot_balance, a.currency)} em ${fdate(date)}`), extra: { record_id: a.id } }, backupReason: acc ? 'Antes de editar a conta ' + acc.name : null, toast: acc ? 'Conta atualizada' : 'Conta cadastrada' });
-      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) toast(`Informe a cotação de ${a.currency} em Mais → Moedas e câmbio`, 'Abrir', () => go('mais', 'moedas'), 6000);
+      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) fxRefresh(true).then(() => { if (C.rateOf(S.ds, a.currency) === null) toast(`Sem cotação de ${a.currency} agora (${S.fxError || 'sem internet?'}). O app tenta de novo sozinho.`, 'Ver', () => go('mais', 'moedas'), 6000); });
     };
     const del = sh.foot.querySelector('[data-del]');
     if (del) del.onclick = async () => {
@@ -5017,13 +5370,39 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'gh-save': () => ghSaveConfig(),
     'acc-new': () => openAccountForm(null),
     'sy-go': () => syGo(),
-    'sy-mode': () => { S.syMode = S.syMode === 'signup' ? 'login' : 'signup'; render(); },
+    'sy-mode': el => { const e = document.getElementById('sy-email'); if (e) S.syEmail = e.value; S.syMode = el.dataset.mode || (S.syMode === 'signup' ? 'login' : 'signup'); S.syLinkMsg = null; render(); },
+    'pw-toggle': el => { const i = document.getElementById(el.dataset.id); if (!i) return; const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'esconder' : 'mostrar'; },
+    'sy-forgot-send': async () => {
+      const email = (document.getElementById('sy-email') || {}).value || '', err = m => { const x = document.getElementById('sy-err'); if (x) x.textContent = m; };
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return err('Confira o e-mail.');
+      try { await syRecoverStart(email); S.syEmail = email; S.syMode = 'login'; S.syLinkMsg = { ok: true, text: 'Se existir conta com este e-mail, o link chega em instantes. Abra o e-mail neste aparelho e toque no link. Veja também o spam.' }; render(); }
+      catch (e) { err(e.friendly ? e.message : 'Erro inesperado: ' + e.message); }
+    },
+    'sy-recover-finish': async () => {
+      const v = id => (document.getElementById(id) || {}).value || '', err = m => { const x = document.getElementById('sy-err'); if (x) x.textContent = m; };
+      if (v('sy-pw').length < 8) return err('A senha nova precisa ter pelo menos 8 caracteres.');
+      try { await syRecoverFinish(v('sy-words'), v('sy-pw')); render(); toast('Senha nova salva. Você já está conectado.'); syRun(false); }
+      catch (e) { document.querySelectorAll('.toast').forEach(t => t.remove()); err(e.friendly ? e.message : 'Erro inesperado: ' + e.message); }
+    },
     'sy-now': () => syRun(true),
+    'sy-invite': () => syInvite(),
+    'sy-approve': el => syApprove(el.dataset.id),
+    'sy-refuse': el => syInviteStatus(el.dataset.id, 'revoked', 'Pedido recusado'),
+    'sy-cancel-inv': el => syInviteStatus(el.dataset.id, 'revoked', 'Convite cancelado'),
+    'sy-role': el => syMemberRole(el.dataset.id, el.dataset.role),
+    'sy-remove': el => syRemoveMember(el.dataset.id),
+    'sy-leave': () => syLeave(),
+    'sy-own': () => syUseOwn().catch(e => showError('Sincronização', esc(e.message))),
+    'sy-check': () => syCheckPending(true).catch(e => showError('Sincronização', esc(e.message))),
+    'sy-accept': async () => { try { await syAcceptInvite(); render(); } catch (e) { showError('Convite', esc(e.message)); render(); } },
     'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
     'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
     'cur-main': () => changeMainCurrency(),
-    'rates-save': () => saveRates(),
+    'fx-now': () => { toast('Buscando cotações…'); fxRefresh(true).then(() => { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(S.fxError ? 'Não foi possível atualizar: ' + S.fxError : 'Cotações atualizadas'); }); },
+    'fx-fix': el => fixRate(el.dataset.cur),
+    'fx-unfix': el => unfixRate(el.dataset.cur),
+    'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
     'gh-push': () => ghPush(),
     'gh-pull': () => ghPull(),
@@ -5081,12 +5460,33 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (e.target && e.target.id === 'ext-search') { S.ext.text = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { const r = document.getElementById('ext-results'); if (r) r.innerHTML = renderExtResults(); }, 150); }
   });
   document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) fxRefresh(false);
     if (!document.hidden && syReady() && (!SY.state.last_sync_at || Date.now() - Date.parse(SY.state.last_sync_at) > 30000)) syRun(false);
     if (document.hidden) S.hiddenAt = Date.now();
     else if (S.meta.pin && S.ds && S.hiddenAt && Date.now() - S.hiddenAt > AUTOLOCK_MS) { S.locked = true; S.sheets.slice().forEach(s => s.close()); render(); }
   });
   window.addEventListener('online', () => { if (syReady()) syRun(false); if (!S.page && S.tab === 'inicio') render(); });
   window.addEventListener('offline', () => { if (!S.page && S.tab === 'inicio') render(); });
+
+  // Links que chegam pelo endereço: convite (#convite=…) e retorno do e-mail (#access_token=…&type=recovery|signup).
+  // Roda ao abrir o app e quando o endereço muda com o app já aberto. Tira o segredo da barra de endereço.
+  async function handleLinkHash() {
+      const hp = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (hp.get('access_token') || hp.get('error_description') || hp.get('error')) {
+        if (hp.get('type') === 'recovery' && hp.get('access_token')) S.syRecovery = { access_token: hp.get('access_token'), refresh_token: hp.get('refresh_token'), expires_in: +hp.get('expires_in') || 3600 };
+        else if (hp.get('access_token')) S.syLinkMsg = { ok: true, text: 'E-mail confirmado! Agora entre com seu e-mail e senha.' };
+        else S.syLinkMsg = { ok: false, text: 'Este link expirou ou já foi usado. Peça outro.' };
+        history.replaceState(null, '', location.pathname + location.search);
+        S.tab = 'mais'; S.page = 'sync'; S.syMode = 'login';
+      }
+      const conv = /[#&]convite=([A-Za-z0-9_-]{20,})/.exec(location.hash);
+      if (conv) { // link de convite: guarda o segredo e tira da barra de endereço
+        try { await DB.set('sync_invite', { token: conv[1], at: Date.now() }); } catch (e) { /* sem armazenamento */ }
+        history.replaceState(null, '', location.pathname + location.search);
+        S.syInvited = true; S.tab = 'mais'; S.page = 'sync';
+      } else if (await syInviteToken()) S.syInvited = true;
+  }
+  window.addEventListener('hashchange', async () => { if (/access_token=|error=|convite=/.test(location.hash)) { await handleLinkHash(); render(); } });
 
   // ---------- inicialização ----------
   async function init() {
@@ -5099,8 +5499,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     }
     if (S.meta.pin && S.ds) S.locked = true;
     await syLoad();
+    await fxLoadCache(); // cotação do último download: funciona sem internet
+    await handleLinkHash();
     render();
     if (syReady()) syRun(false);
+    fxRefresh(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
     await storageInfo();
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {

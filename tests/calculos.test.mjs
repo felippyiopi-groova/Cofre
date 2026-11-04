@@ -79,3 +79,22 @@ test('com cotação: tudo convertido para a moeda principal', () => {
   assert.equal(C.summarize(ds, '2026-11-04').totalMain, 226);
   assert.equal(C.rateOf({ settings: { exchange_rates: { USD: { rate: 0 } } } }, 'USD'), null);
 });
+
+test('cotação automática: converte sozinha; fixada pela pessoa tem prioridade', () => {
+  const ds = base(); ds.transactions.pop();
+  try {
+    C.setAutoRates('BRL', '2026-11-04', { eur: 0.16221458, usd: 0.18218894 }); // tabela real de 04/11/2026
+    const info = C.rateInfo(ds, 'EUR');
+    assert.equal(info.source, 'automatica');
+    assert.equal(C.round2(info.rate), 6.16);
+    assert.equal(C.summarize(ds, '2026-11-04').missingRates.length, 0);   // nada falta: veio da tabela
+    assert.equal(C.summarize(ds, '2026-11-04').totalMain, C.round2(350 + 170 / 0.16221458));
+    ds.settings = { exchange_rates: { EUR: { rate: 6, fixed: true } } };     // fixada vence a automática
+    assert.equal(C.rateInfo(ds, 'EUR').source, 'fixada');
+    assert.equal(C.summarize(ds, '2026-11-04').totalMain, 1370);
+    ds.settings = { exchange_rates: { EUR: { rate: 6 } } };                  // digitada antiga: automática vence
+    assert.equal(C.rateInfo(ds, 'EUR').source, 'automatica');
+    ds.settings = { main_currency: 'USD' };                                  // tabela é de BRL: não serve para USD
+    assert.equal(C.rateInfo(ds, 'EUR').rate, null);
+  } finally { C.setAutoRates(null, null, {}); }
+});
