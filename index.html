@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-JIMwEWGCc5s+ujNWKgZZ76Y4eCgu9RC3h7EnothqpwA='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-xnTbCYNKOm5y+Qn1GrSS6qzbK2AT6YjMFAHQ/2BdWeg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -327,7 +327,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     cancelado: 'cancelado', cancelada: 'cancelado', canceled: 'cancelado', cancelled: 'cancelado'
   };
   const CLOSED_OBLIGATION = new Set(['pago', 'paga', 'quitado', 'quitada', 'cancelado', 'cancelada', 'paid']);
-  const CATEGORIES = ['Casa', 'Alimentação/Compras', 'Transporte', 'Lazer/Assinaturas', 'Banco/Dívidas', 'Viagem/Espanha', 'Saúde/Emergências'];
+  const CATEGORIES = ['Casa', 'Alimentação/Compras', 'Transporte', 'Lazer/Assinaturas', 'Banco/Dívidas', 'Viagem', 'Saúde/Emergências'];
 
   // ---------- utilitários ----------
   function norm(s) {
@@ -401,10 +401,30 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const acc = ((ds && ds.accounts) || []).find(a => isObj(a) && idOf(a) === (t && t.account_id));
     return String((acc && acc.currency) || (ds && ds.currency_default) || 'BRL').toUpperCase();
   }
-  // Soma de contas a pagar só em reais (contas em outra moeda ficam fora, para não misturar € com R$).
+  // ---------- moeda principal e câmbio ----------
+  // ds.settings.main_currency: moeda em que os totais são mostrados (padrão BRL).
+  // ds.settings.exchange_rates[MOEDA] = { rate, updated_at }: 1 MOEDA = rate unidades da moeda principal.
+  // A cotação é digitada pela pessoa (o app não busca na internet).
+  function mainCurrency(ds) {
+    const st = ds && isObj(ds.settings) ? ds.settings : {};
+    return String(st.main_currency || (ds && ds.currency_default) || 'BRL').toUpperCase();
+  }
+  function rateOf(ds, cur) {
+    cur = String(cur || '').toUpperCase();
+    if (!cur || cur === mainCurrency(ds)) return 1;
+    const rates = ds && isObj(ds.settings) && isObj(ds.settings.exchange_rates) ? ds.settings.exchange_rates : {};
+    const r = rates[cur]; const n = num(isObj(r) ? r.rate : r);
+    return n > 0 ? n : null;
+  }
+  // Valor convertido para a moeda principal, ou null se falta cotação.
+  function toMain(amount, cur, ds) {
+    const r = rateOf(ds, cur);
+    return r === null || typeof amount !== 'number' || !isFinite(amount) ? null : amount * r;
+  }
+  // Soma de contas a pagar na moeda principal. Contas sem cotação ficam fora (veja summarize().openNoRate).
   // open=true usa o valor restante (pagamento parcial).
-  function sumObligationsBRL(list, open, ds) {
-    return round2((list || []).reduce((s, o) => s + (currencyOf(o, ds) === 'BRL' ? ((open ? openAmountOf(o) : amountOf(o)) || 0) : 0), 0));
+  function sumObligations(list, open, ds) {
+    return round2((list || []).reduce((s, o) => { const v = toMain((open ? openAmountOf(o) : amountOf(o)) || 0, currencyOf(o, ds), ds); return s + (v || 0); }, 0));
   }
   // Quanto ainda falta pagar: se a conta tem "restante", vale o restante (pagamento parcial).
   function openAmountOf(o) {
@@ -607,7 +627,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (/^casa|moradia/.test(n)) return 'Casa';
     if (/lazer|assinatura/.test(n)) return 'Lazer/Assinaturas';
     if (/banco|divida/.test(n)) return 'Banco/Dívidas';
-    if (/viagem|espanha/.test(n)) return 'Viagem/Espanha';
+    if (/viagem|espanha/.test(n)) return 'Viagem'; // 'Viagem/Espanha' de backups antigos cai aqui
     if (/saude|emergenc/.test(n)) return 'Saúde/Emergências';
     return String(c);
   }
@@ -787,7 +807,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         status: acc.status || '', cutoff, snapshot: snap, movements: round2(mov), txCount: n,
         balance: snap === null || isNaN(snap) ? null : round2(snap + mov),
         forecastMovements: round2(pendingMov),
-        protected: /protegid|espanha/.test(norm(acc.status)),
+        protected: /protegid|espanha|reserva/.test(norm(acc.status)),
         unknown: snap === null
       });
     }
@@ -827,6 +847,23 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const brlProt = bal.filter(b => b.currency === 'BRL' && b.protected && b.balance !== null);
     const eur = bal.filter(b => b.currency === 'EUR' && b.balance !== null);
     const sum = arr => round2(arr.reduce((s, b) => s + b.balance, 0));
+    // Totais por moeda e convertidos para a moeda principal.
+    const main = mainCurrency(ds);
+    const byCur = {};
+    for (const b of bal) {
+      if (b.balance === null) continue;
+      const c = byCur[b.currency] = byCur[b.currency] || { currency: b.currency, free: 0, protected: 0, rate: rateOf(ds, b.currency), accounts: 0 };
+      if (b.protected) c.protected += b.balance; else c.free += b.balance;
+      c.accounts++;
+    }
+    let freeMain = 0, protectedMain = 0;
+    const currencies = Object.values(byCur).map(c => {
+      c.free = round2(c.free); c.protected = round2(c.protected); c.total = round2(c.free + c.protected);
+      c.converted = c.rate === null ? null : round2(c.total * c.rate);
+      if (c.rate !== null) { freeMain += c.free * c.rate; protectedMain += c.protected * c.rate; }
+      return c;
+    }).sort((a, b) => (a.currency === main ? -1 : b.currency === main ? 1 : a.currency.localeCompare(b.currency)));
+    freeMain = round2(freeMain); protectedMain = round2(protectedMain);
     const provisions = (ds.budgets || []).filter(b => {
       if (!isObj(b)) return false;
       const st = norm(b.status);
@@ -836,13 +873,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     });
     const provTotal = round2(provisions.reduce((s, b) => s + (amountOf(b) || 0), 0));
     const open = (ds.obligations || []).filter(o => isObj(o) && isObligationOpen(o));
-    const openBRL = open.filter(o => currencyOf(o, ds) === 'BRL');
+    const openConv = open.filter(o => rateOf(ds, currencyOf(o, ds)) !== null);
     const byMonth = {};
     for (const o of open) {
       const m = o.due_date ? String(o.due_date).slice(0, 7) : 'sem-data';
       byMonth[m] = byMonth[m] || { pendente: 0, planejado: 0, outros: 0, items: [] };
       const st = norm(o.status);
-      const a = currencyOf(o, ds) === 'BRL' ? (openAmountOf(o) || 0) : 0; // totais em R$; outras moedas ficam em openOtherCurrency
+      const a = toMain(openAmountOf(o) || 0, currencyOf(o, ds), ds) || 0; // na moeda principal; sem cotação fica em openNoRate
       if (st === 'pendente') byMonth[m].pendente += a; else if (st === 'planejado') byMonth[m].planejado += a; else byMonth[m].outros += a;
       byMonth[m].items.push(o);
     }
@@ -854,11 +891,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       balances: bal, credit: computeCredit(ds),
       cashBRL: sum(brlFree), protectedBRL: sum(brlProt), eur: sum(eur),
       unknownAccounts: bal.filter(b => b.unknown),
-      provisions, provTotal, freeAfterProvisions: round2(sum(brlFree) - provTotal),
+      mainCurrency: main, currencies, freeMain, protectedMain, totalMain: round2(freeMain + protectedMain),
+      missingRates: currencies.filter(c => c.rate === null).map(c => c.currency),
+      provisions, provTotal, provMain: toMain(provTotal, 'BRL', ds),
+      freeAfterProvisions: round2(freeMain - (toMain(provTotal, 'BRL', ds) || 0)),
       openObligations: open, byMonth, overdue, upcoming,
-      openPending: round2(openBRL.filter(o => norm(o.status) === 'pendente').reduce((s, o) => s + (openAmountOf(o) || 0), 0)),
-      openPlanned: round2(openBRL.filter(o => norm(o.status) !== 'pendente').reduce((s, o) => s + (openAmountOf(o) || 0), 0)),
-      openOtherCurrency: open.filter(o => currencyOf(o, ds) !== 'BRL')
+      openPending: sumObligations(openConv.filter(o => norm(o.status) === 'pendente'), true, ds),
+      openPlanned: sumObligations(openConv.filter(o => norm(o.status) !== 'pendente'), true, ds),
+      openNoRate: open.filter(o => rateOf(ds, currencyOf(o, ds)) === null)
     };
   }
 
@@ -868,9 +908,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!isObj(t) || txType(t) !== 'despesa' || txStatus(t) !== 'confirmado') continue;
       const m = (dateOnly(t.date) || '').slice(0, 7);
       if (!m) continue;
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, otherCurrency: 0 };
-      const a = num(t.amount) || 0;
-      if (txCurrency(t, ds) !== 'BRL') { months[m].otherCurrency += a; continue; } // não soma euro com real
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, noRate: {} };
+      const cur = txCurrency(t, ds);
+      const a = toMain(num(t.amount) || 0, cur, ds);
+      if (a === null) { months[m].noRate[cur] = (months[m].noRate[cur] || 0) + (num(t.amount) || 0); continue; } // sem cotação: fora do total
       months[m].confirmed += a;
       const c = t.category || 'Sem categoria';
       months[m].byCat[c] = (months[m].byCat[c] || 0) + a;
@@ -878,11 +919,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     for (const [k, v] of Object.entries(ds)) {
       if (!/_summary$/.test(k) || !isObj(v) || !v.month) continue;
       const m = String(v.month).slice(0, 7);
-      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, otherCurrency: 0 };
-      months[m].historical += num(v.paid_total_brl) || 0;
+      months[m] = months[m] || { month: m, confirmed: 0, historical: 0, byCat: {}, noRate: {} };
+      months[m].historical += toMain(num(v.paid_total_brl) || 0, 'BRL', ds) || 0;
       months[m].historicalSource = k;
     }
-    return Object.values(months).map(m => Object.assign(m, { confirmed: round2(m.confirmed), historical: round2(m.historical), otherCurrency: round2(m.otherCurrency) }))
+    return Object.values(months).map(m => Object.assign(m, { confirmed: round2(m.confirmed), historical: round2(m.historical) }))
       .sort((a, b) => a.month.localeCompare(b.month));
   }
 
@@ -892,6 +933,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'Preserve TODOS os campos e IDs existentes. Não renomeie IDs.',
     'Novos lançamentos vão em "transactions", cada um com "id" novo e único (ex.: tx-2026-10-26-uber-ida), "date" AAAA-MM-DD, "type" (despesa | receita | transferencia | pagamento_fatura | emprestimo | provisao | ajuste), "status" (confirmado | pendente | planejado | estimado | cancelado), "account_id" (de accounts ou credit_facilities), "amount" positivo, "currency", "category", "description", "origin" (usuario | recibo | calculo), "created_at" e "updated_at".',
     'Use status "confirmado" somente para o que o usuário confirmou que aconteceu. Compras planejadas continuam "planejado".',
+    'Contas em "accounts": "id", "name", "institution" (banco), "currency" (código ISO de 3 letras, ex.: BRL, USD, EUR), "snapshot_balance", "snapshot_date" e "status" ("operacional" ou "reserva"; reserva não entra no disponível).',
+    '"settings.main_currency" é a moeda em que o app mostra os totais e "settings.exchange_rates" guarda as cotações digitadas pelo usuário (1 MOEDA = "rate" na moeda principal). Não altere sem pedido explícito e não invente cotações.',
     'Não altere "snapshot_balance" nem "snapshot_date" sem pedido explícito. O app calcula: saldo = snapshot + lançamentos confirmados com data posterior ao corte.',
     'Lançamento na MESMA data do corte só entra no saldo se tiver "after_snapshot": true.',
     'Compra no cartão de crédito: type "despesa" com "account_id" = id do cartão em credit_facilities (aumenta a fatura, não desconta conta bancária). Pagamento da fatura: type "pagamento_fatura", "account_id" = conta que pagou, "to_account_id" = cartão (não é nova despesa).',
@@ -930,7 +973,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       calculated_at: nowIso,
       accounts: sum.balances.map(b => ({ id: b.id, currency: b.currency, snapshot: b.snapshot, movements_after_cutoff: b.movements, balance: b.balance })),
       brl_free_cash: sum.cashBRL, brl_protected: sum.protectedBRL, eur_total: sum.eur,
-      active_provisions_brl: sum.provTotal
+      active_provisions_brl: sum.provTotal,
+      main_currency: sum.mainCurrency, total_main: sum.totalMain, free_main: sum.freeMain, protected_main: sum.protectedMain,
+      by_currency: sum.currencies.map(c => ({ currency: c.currency, free: c.free, protected: c.protected, rate_to_main: c.rate, converted: c.converted }))
     };
     const ch = changesSince(ds, opts.base);
     out.sync = {
@@ -980,7 +1025,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
-    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligationsBRL, currencyOf, txCurrency, isObligationOpen,
+    norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, toMain, currencyOf, txCurrency, isObligationOpen,
     prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
@@ -1085,7 +1130,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   const strip = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   const RULES = [
     { cat: 'Alimentação/Compras', why: 'entrega de comida', re: /\b(uber\s*eats|ifood|i\s*food|rappi|ze\s*delivery|aiqfome)\b/ },
-    { cat: 'Viagem/Espanha', why: 'viagem', re: /\b(passagem\s+aerea|passagens\s+aereas|voo|voos|aeroporto|passaporte|espanha|visto|madri|barcelona|hospedagem|hotel|airbnb)\b/ },
+    { cat: 'Viagem', why: 'viagem', re: /\b(passagem\s+aerea|passagens\s+aereas|voo|voos|aeroporto|passaporte|espanha|visto|madri|barcelona|hospedagem|hotel|airbnb)\b/ },
     { cat: 'Transporte', why: 'transporte', re: /\b(uber|99|99\s*pop|99\s*moto|corrida|corridas|moto|mototaxi|moto\s*taxi|taxi|onibus|metro|trem|brt|passagem|bilhete|bilhete\s+unico|combustivel|gasolina|etanol|alcool\s+carro|estacionamento|pedagio|cabify|indrive|indriver)\b/ },
     { cat: 'Casa', why: 'casa', re: /\b(aluguel|agua|sabesp|energia|luz|enel|eletropaulo|internet|wifi|gas|condominio|iptu|claro|vivo|tim|oi|chip|telefone|celular|advogado|imobiliaria|perua|escola|faxina|reforma|moveis?)\b/ },
     { cat: 'Alimentação/Compras', why: 'alimentação', re: /\b(almoco|almocos|jantar|janta|cafe|cafes|restaurante|lanche|lanches|lanchonete|leite|supermercado|mercado|mercearia|padaria|pao|paes|feira|acougue|hortifruti|marmita|refrigerante|refri|subway|mcdonalds|mc\s*donalds|burger|pizza|doce|doces|banana|bananas|fruta|frutas|comida|rexpar|atacadao|assai|carrefour|1a99|lojas)\b/ },
@@ -1221,6 +1266,18 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     return res;
   }
 
+  // Junta os baldes por moeda ({BRL:{in,out}, EUR:{...}}) na moeda principal. Moedas sem cotação vão em noRate.
+  function inMain(buckets, ds) {
+    const out = { in: 0, out: 0, noRate: [] };
+    for (const [cur, b] of Object.entries(buckets || {})) {
+      const r = C.rateOf(ds, cur);
+      if (r === null) { if (b.in || b.out) out.noRate.push({ currency: cur, in: b.in, out: b.out }); continue; }
+      out.in += b.in * r; out.out += b.out * r;
+    }
+    out.in = C.round2(out.in); out.out = C.round2(out.out);
+    return out;
+  }
+
   // Saldo histórico de uma conta: só conhecido a partir da data de corte.
   function balanceAt(ds, accountId, dateInclusive) {
     const a = (ds.accounts || []).find(x => x && x.id === accountId);
@@ -1273,7 +1330,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     };
   }
 
-  const api = { periodRange, filterTx, totals, flowOf, balanceAt, statement, historicalSummaries, obligationsIn, accountsIndex, addDays, MONTHS };
+  const api = { periodRange, filterTx, totals, flowOf, balanceAt, statement, historicalSummaries, obligationsIn, accountsIndex, addDays, MONTHS, inMain};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Reports = api;
 })(typeof self !== 'undefined' ? self : this);
 
@@ -1584,11 +1641,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const cat = categoryRows(ds, p.start, p.end);
     const ob = R.obligationsIn(ds, p.start, p.end);
     const m = baseModel('mensal', 'Relatório Financeiro Mensal', p.label, [['Mês', p.label], ['Data de corte dos saldos', fd(ds.snapshot_date)]]);
-    const c = tot.confirmed.BRL || { in: 0, out: 0 }, f = tot.forecast.BRL || { in: 0, out: 0 };
+    const MC = s.mainCurrency, c = R.inMain(tot.confirmed, ds), f = R.inMain(tot.forecast, ds);
     m.sections.push({ type: 'kpis', items: [
-      { label: 'Disponível em conta hoje', value: money(s.cashBRL), sub: 'sem crédito e reservas' },
-      { label: 'Entradas confirmadas', value: money(c.in), sub: 'lançamentos do mês' },
-      { label: 'Despesas confirmadas', value: money(c.out), sub: 'lançamentos do mês' },
+      { label: 'Disponível em conta hoje', value: money(s.freeMain, MC), sub: 'sem crédito e reservas' },
+      { label: 'Entradas confirmadas', value: money(c.in, MC), sub: 'lançamentos do mês' },
+      { label: 'Despesas confirmadas', value: money(c.out, MC), sub: 'lançamentos do mês' },
       { label: 'Previsto (não aplicado)', value: `+${money(f.in)} / −${money(f.out)}` }
     ] });
     if (cat.rows.length) {
@@ -1603,7 +1660,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       raw: [...ob.paid, ...ob.open].map(o => [oblTitle(o), { v: o.due_date, t: 'date' }, human(o.status), { v: C.amountOf(o), t: 'money' }]), rawHead: ['Conta', 'Vencimento', 'Status', 'Valor'] });
     const tb = txTable(ds, txs, null, null);
     m.sections.push({ type: 'table', title: `Lançamentos do mês (${txs.length})`, head: tb.head, rows: tb.rows, raw: tb.raw, rawHead: tb.rawHead, widths: tb.widths, primary: true, empty: 'Nenhum lançamento registrado no app neste mês.' });
-    m.sections.push({ type: 'notes', items: cat.notes.concat(['Euros (Espanha) e caixinha são reservas protegidas e não entram no disponível.', 'Crédito, cashback e valores prometidos não são dinheiro em caixa.']) });
+    m.sections.push({ type: 'notes', items: cat.notes.concat(['Contas marcadas como reserva não entram no disponível.', `Valores em outras moedas convertidos para ${MC} pela cotação informada no app${s.missingRates.length ? ' (sem cotação, fora dos totais: ' + s.missingRates.join(', ') + ')' : ''}.`, 'Crédito, cashback e valores prometidos não são dinheiro em caixa.']) });
     m.formats = ['pdf', 'png', 'xlsx', 'csv']; m.file = 'relatorio_mensal_' + month;
     return m;
   }
@@ -1623,10 +1680,10 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = baseModel('familia', 'Resumo Financeiro da Família', p.label, [['Mês', p.label], ['Semáforo', tl || 'não definido']]);
     m.traffic = tl;
     m.sections.push({ type: 'kpis', items: [
-      { label: 'Disponível em conta', value: money(s.cashBRL), tone: 'accent' },
-      { label: 'Livre após provisões', value: money(s.freeAfterProvisions) },
-      { label: 'Reserva protegida', value: money(s.protectedBRL), sub: 'caixinha' },
-      { label: 'Reserva Espanha', value: money(s.eur, 'EUR'), sub: 'em euros' }
+      { label: 'Disponível em conta', value: money(s.freeMain, s.mainCurrency), tone: 'accent' },
+      { label: 'Livre após provisões', value: money(s.freeAfterProvisions, s.mainCurrency) },
+      { label: 'Reservas', value: money(s.protectedMain, s.mainCurrency), sub: 'contas marcadas como reserva' },
+      { label: 'Patrimônio total', value: money(s.totalMain, s.mainCurrency), sub: s.missingRates.length ? 'sem ' + s.missingRates.join(', ') + ' (falta cotação)' : 'todas as moedas convertidas' }
     ] });
     if (cat.rows.length) m.sections.push({ type: 'bars', title: `Gastos de ${p.label}`, items: cat.rows.map(r => ({ label: r.cat, value: r.total, display: money(r.total) })), total: money(C.round2(cat.histTotal + cat.afterTotal)) });
     const up = s.upcoming.slice(0, 6);
@@ -1644,7 +1701,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = baseModel('dividas', 'Demonstrativo de Dívidas e Vencimentos', 'Contas em aberto em ' + fd(t), [['Posição em', fd(t)]]);
     m.sections.push({ type: 'kpis', items: [
       { label: 'Pendente', value: money(s.openPending), sub: 'em aberto' }, { label: 'Planejado', value: money(s.openPlanned), sub: 'ainda por vir' },
-      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(C.sumObligationsBRL(s.overdue, true)) : 'nenhuma' },
+      { label: 'Vencidas', value: String(s.overdue.length), sub: s.overdue.length ? money(C.sumObligations(s.overdue, true, ds)) : 'nenhuma' },
       { label: 'Sem data definida', value: String(open.filter(o => !o.due_date).length) }
     ] });
     m.sections.push({ type: 'table', title: `Contas a pagar em aberto (${open.length})`, head: ['Conta', 'Vencimento', 'Status', 'Valor', 'Observação'], widths: [24, 13, 12, 14, 37], align: ['left', 'left', 'left', 'right', 'left'],
@@ -1946,7 +2003,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     [/\b(casa|moradia|contas da casa)\b/, 'Casa'],
     [/\b(lazer|diversao|assinaturas?)\b/, 'Lazer/Assinaturas'],
     [/\b(banco|bancos|dividas?|juros|tarifas?)\b/, 'Banco/Dívidas'],
-    [/\b(viagem|viagens|espanha)\b/, 'Viagem/Espanha'],
+    [/\b(viagem|viagens|espanha)\b/, 'Viagem'],
     [/\b(saude|farmacia|remedios?|emergencias?)\b/, 'Saúde/Emergências']
   ];
   function explicitCategory(n) { for (const [re, c] of CAT_WORDS) if (re.test(n)) return c; return null; }
@@ -2182,13 +2239,13 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           });
           return { kind: 'answer', title: 'Saldo', lines, notes: [] };
         }
-        return { kind: 'answer', title: 'Disponível em conta', total: money(s.cashBRL), totalLabel: 'confirmado, sem crédito nem reservas', lines: s.balances.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.protected ? 'protegida' : '' })).concat([{ label: 'Livre após provisões', value: money(s.freeAfterProvisions), sub: 'provisões: ' + money(s.provTotal) }]), notes: [] };
+        return { kind: 'answer', title: 'Disponível em conta', total: money(s.freeMain, s.mainCurrency), totalLabel: 'confirmado, sem crédito nem reservas' + (s.missingRates.length ? ' · sem ' + s.missingRates.join(', ') + ' (falta cotação)' : ''), lines: s.balances.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.protected ? 'protegida' : '' })).concat([{ label: 'Livre após provisões', value: money(s.freeAfterProvisions), sub: 'provisões: ' + money(s.provTotal) }]), notes: [] };
       }
       case 'reserve': {
-        if (q.which === 'caixinha') return { kind: 'answer', title: 'Reserva protegida', total: money(s.protectedBRL), totalLabel: 'caixinha', lines: [], notes: ['Uso só com autorização.'] };
-        const g = (ds.goals || []).find(x => x && /spain|espanha/.test(N(x.id + ' ' + x.description)));
-        const lines = g ? [{ label: 'Meta', value: money(C.num(g.eur_goal), 'EUR'), sub: g.target_date ? 'até ' + g.target_date : '' }, { label: 'Próximo marco', value: money(C.num(g.eur_milestone), 'EUR') }] : [];
-        return { kind: 'answer', title: 'Reserva para a Espanha', total: money(s.eur, 'EUR'), totalLabel: 'Revolut EUR · sem conversão para reais', lines, notes: [] };
+        const res = s.balances.filter(b => b.protected);
+        const lines = res.map(b => ({ label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub: b.currency !== s.mainCurrency ? (C.rateOf(ds, b.currency) ? '≈ ' + money(C.round2(b.balance * C.rateOf(ds, b.currency)), s.mainCurrency) : 'sem cotação') : '' }));
+        for (const g of (ds.goals || []).filter(x => x && x.eur_goal != null)) lines.push({ label: 'Meta: ' + (g.description || C.displayName(g.id)), value: money(C.num(g.eur_goal), 'EUR'), sub: g.target_date ? 'até ' + g.target_date : '' });
+        return { kind: 'answer', title: 'Reservas', total: money(s.protectedMain, s.mainCurrency), totalLabel: 'contas marcadas como reserva, convertidas para ' + s.mainCurrency, lines, notes: res.length ? ['Reservas não entram no disponível.'] : ['Nenhuma conta marcada como reserva. Marque ao editar a conta.'] };
       }
       case 'due': {
         const p = q.period;
@@ -2198,7 +2255,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         else list = s.upcoming.slice(0, 10);
         list.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
         const undated = s.openObligations.filter(o => !o.due_date);
-        const tot = C.sumObligationsBRL(list, true);
+        const tot = C.sumObligations(list, true, ds);
         return { kind: 'answer', title: q.overdue ? 'Contas vencidas' : (p ? `Vencimentos · ${p.label}` : 'Próximos vencimentos'), total: money(C.round2(tot)), totalLabel: `${list.length} conta(s)`,
           lines: list.map(o => ({ label: o.name || o.description || C.displayName(o.id), value: money(C.openAmountOf(o), C.currencyOf(o)), sub: `${o.due_date ? 'vence ' + fd(o.due_date) : 'sem data'} · ${o.status}`, act: 'obligation', id: o.id })),
           notes: undated.length ? [`${undated.length} conta(s) em aberto não têm data de vencimento e não aparecem nesta lista.`] : [], actions: [{ label: 'Gerar demonstrativo', act: 'doc', params: { doc: 'debts', format: 'pdf' } }] };
@@ -2366,7 +2423,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function slug(s) { return C.norm(s).replace(/[^a-z0-9_]/g, '').replace(/_+/g, '-').slice(0, 24) || 'item'; }
   function rand(n) { const a = crypto.getRandomValues(new Uint8Array(n)); return Array.from(a).map(b => b.toString(16).padStart(2, '0')).join(''); }
 
-  const ACCOUNT_STATUS = { operacional: 'Operacional', colchao: 'Colchão', protegida: 'Protegida', espanha: 'Reserva Espanha', saldo_desconhecido: 'Saldo desconhecido' };
+  const ACCOUNT_STATUS = { operacional: 'Operacional', reserva: 'Reserva', encerrada: 'Encerrada', colchao: 'Colchão', protegida: 'Protegida', espanha: 'Reserva Espanha', saldo_desconhecido: 'Saldo desconhecido' };
   const TYPE_LABEL = { despesa: 'Despesa', receita: 'Receita', transferencia: 'Transferência entre contas', pagamento_fatura: 'Pagamento de fatura', emprestimo: 'Empréstimo recebido', ajuste: 'Ajuste de saldo', provisao: 'Provisão' };
   const STATUS_LABEL = { confirmado: 'Confirmado (pago)', pendente: 'Pendente', planejado: 'Planejado', estimado: 'Estimado', cancelado: 'Cancelado' };
   const ORIGIN_LABEL = { usuario: 'Usuário', recibo: 'Recibo', calculo: 'Cálculo' };
@@ -2577,7 +2634,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     </div>
     ${needsInstall ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Instale antes de importar.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra o app pelo ícone e importe lá dentro. Os dados do Safari e do app instalado ficam em lugares separados.</div></div>` : ''}
     <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
-    <button class="btn" data-act="import">${ic('up')} Importar backup JSON</button>
+    <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
+    <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
     <p class="help" style="text-align:center;margin-top:12px">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>`;
   }
   const WARNING_TEXT = 'Dados salvos neste dispositivo podem ser perdidos se o navegador limpar armazenamento, o aparelho for restaurado ou o app for removido. Faça backup externo.';
@@ -2588,50 +2646,67 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const lvl = tl && tl.level ? String(tl.level).toUpperCase() : null;
     return `<button class="light ${lvl || 'none'}" data-act="light" aria-label="Semáforo de liquidez: ${esc(lvl || 'não definido')}">${esc(lvl || 'SEM SEMÁFORO')}</button>`;
   }
+  // Nome da moeda em português (ex.: EUR → euro). Cai no código se o navegador não souber.
+  let curNames;
+  function curName(code) {
+    try { curNames = curNames || new Intl.DisplayNames(['pt-BR'], { type: 'currency' }); return (curNames.of(code) || code).toLowerCase(); } catch (e) { return code; }
+  }
+  // Bloco "outras moedas": saldo original, cotação e valor convertido.
+  function currenciesBlock(sum) {
+    const others = sum.currencies.filter(c => c.currency !== sum.mainCurrency);
+    if (!others.length) return '';
+    const MC = sum.mainCurrency;
+    return `<div class="section-title"><span>Outras moedas</span><button class="link" data-act="page" data-tab="mais" data-page="moedas">Cotações</button></div><div class="card"><div class="rows">` +
+      others.map(c => `<button class="row-item" data-act="page" data-tab="mais" data-page="moedas"><div class="ico">${esc(c.currency)}</div>
+        <div class="main"><div class="t">${M(c.total, c.currency)}</div><div class="s">${c.rate === null ? '<span class="badge warn">sem cotação</span> fora do patrimônio total' : esc('1 ' + c.currency + ' = ' + money(c.rate, MC).replace(/\s/g, ' '))}${c.protected ? ' · ' + M(c.protected, c.currency) + ' em reserva' : ''}</div></div>
+        <div class="amt">${c.converted === null ? '<span class="muted">—</span>' : '≈ ' + M(c.converted, MC)}</div></button>`).join('') + `</div></div>`;
+  }
   function viewInicio() {
-    const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
+    const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today), MC = sum.mainCurrency;
     const mp = Reports.periodRange('mes', today);
     const mt = Reports.totals(ds, Reports.filterTx(ds, { start: mp.start, end: mp.end }));
-    const conf = mt.confirmed.BRL || { in: 0, out: 0 }, prev = mt.forecast.BRL || { in: 0, out: 0 };
+    const conf = Reports.inMain(mt.confirmed, ds), prev = Reports.inMain(mt.forecast, ds);
     const ob = Reports.obligationsIn(ds, mp.start, mp.end);
     const hist = Reports.historicalSummaries(ds, mp.start, mp.end)[0];
-    const patrimonio = C.round2(sum.cashBRL + sum.protectedBRL);
     const lastExp = S.meta.last_export_at;
     let h = `<div class="topbar"><div><div class="hello">${esc(new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }))}</div><div class="name">Meu banco pessoal</div></div>
       <div style="display:flex;gap:8px;align-items:center">${lightPill()}<button class="icon-btn" data-act="toggle-hide" aria-label="${S.meta.hide_values ? 'Mostrar valores' : 'Esconder valores'}">${ic(S.meta.hide_values ? 'eyeOff' : 'eye')}</button></div></div>`;
     if (S.meta.dirty) h += `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Backup pendente.</b> Há alterações desde ${lastExp ? 'o último backup (' + fdatetime(lastExp) + ')' : 'que o app foi preenchido'}. <button class="link" data-act="export" data-kind="json">Exportar agora</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>${sum.overdue.length} conta(s) com vencimento passado</b> ainda em aberto. <button class="link" data-act="tab" data-tab="contas">Ver</button></div></div>`;
     h += `<section class="hero" aria-label="Patrimônio">
-      <div class="label">Patrimônio em reais · dinheiro próprio conhecido</div>
-      <div class="big">${M(patrimonio)}</div>
+      <div class="label">Patrimônio total em ${esc(curName(MC))} · dinheiro próprio conhecido</div>
+      <div class="big">${M(sum.totalMain, MC)}</div>
       <div class="row">
-        <div class="pill"><div class="k">Disponível em conta</div><div class="v">${M(sum.cashBRL)}</div></div>
-        <div class="pill"><div class="k">Reserva protegida</div><div class="v">${M(sum.protectedBRL)}</div></div>
+        <div class="pill"><div class="k">Disponível em conta</div><div class="v">${M(sum.freeMain, MC)}</div></div>
+        <div class="pill"><div class="k">Reservas</div><div class="v">${M(sum.protectedMain, MC)}</div></div>
       </div>
-      <div class="row" style="margin-top:8px">
-        <div class="pill"><div class="k">Provisões reservadas</div><div class="v">${M(sum.provTotal)}</div></div>
-        <div class="pill"><div class="k">Livre após provisões</div><div class="v">${M(sum.freeAfterProvisions)}</div></div>
-      </div>
-      <div class="foot">Saldos de corte (${fdate(ds.snapshot_date)}) + lançamentos confirmados. Não inclui crédito, euros, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
+      ${sum.provTotal ? `<div class="row" style="margin-top:8px">
+        <div class="pill"><div class="k">Provisões reservadas</div><div class="v">${sum.provMain === null ? M(sum.provTotal) : M(sum.provMain, MC)}</div></div>
+        <div class="pill"><div class="k">Livre após provisões</div><div class="v">${M(sum.freeAfterProvisions, MC)}</div></div>
+      </div>` : ''}
+      <div class="foot">Saldo informado de cada conta + lançamentos confirmados${sum.currencies.length > 1 ? ', outras moedas convertidas pela cotação que você informou' : ''}. Não inclui crédito, cashback, valores prometidos${sum.unknownAccounts.length ? ' nem contas com saldo desconhecido' : ''}.</div>
     </section>
+    ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Falta cotação:</b> ${esc(sum.missingRates.join(', '))} ficam fora do patrimônio total. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>` : ''}
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
       <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
       <button data-act="tab" data-tab="pergunte"><span>${ic('chat')}</span>Pergunte</button>
       <button data-act="page" data-tab="mais" data-page="docs"><span>${ic('file')}</span>Documentos</button>
     </div>
-    <div class="stat gold" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center"><div><div class="k">✈️ Reserva Espanha · Revolut EUR</div><div class="v">${M(sum.eur, 'EUR')}</div><div class="s">separada, sem conversão para reais</div></div>${ic('lock', 'chev')}</div>`;
+    `;
 
-    h += `<div class="section-title"><span>Contas</span></div><div class="card"><div class="rows">`;
+    h += `<div class="section-title"><span>Contas</span><button class="link" data-act="acc-new">+ Nova conta</button></div><div class="card"><div class="rows">`;
+    if (!sum.balances.length) h += `<div class="muted small">Nenhuma conta cadastrada. Toque em <b>+ Nova conta</b> para informar banco, moeda e saldo.</div>`;
     for (const b of sum.balances) {
       const st = C.norm(b.status);
       const badge = b.unknown ? '<span class="badge warn">saldo desconhecido</span>' : (b.protected ? `<span class="badge gold">${esc(ACCOUNT_STATUS[st] || humanize(b.status))}</span>` : `<span class="badge">${esc(ACCOUNT_STATUS[st] || humanize(b.status))}</span>`);
-      const sub = b.unknown ? 'Valor não informado' : (b.txCount ? `${b.movements >= 0 ? '+' : '−'}${money(Math.abs(b.movements), b.currency)} desde o corte` : `corte ${fdate(b.cutoff).slice(0, 5)}`);
-      h += `<button class="row-item" data-act="account" data-id="${esc(b.id)}"><div class="ico">${b.currency === 'EUR' ? '€' : (b.protected ? '🔒' : '🏦')}</div>
+      const sub = b.unknown ? 'Valor não informado' : (b.txCount ? `${b.movements >= 0 ? '+' : '−'}${money(Math.abs(b.movements), b.currency)} desde ${fdate(b.cutoff).slice(0, 5)}` : `saldo de ${fdate(b.cutoff).slice(0, 5)}`);
+      h += `<button class="row-item" data-act="account" data-id="${esc(b.id)}"><div class="ico">${b.currency !== MC ? esc(b.currency) : (b.protected ? '🔒' : '🏦')}</div>
         <div class="main"><div class="t">${esc(b.name)}</div><div class="s">${badge} <span class="${S.meta.hide_values ? 'money' : ''}">${esc(sub)}</span></div></div>
         <div class="amt">${b.balance === null ? '<span class="muted">—</span>' : M(b.balance, b.currency)}</div></button>`;
     }
     h += `</div></div>`;
+    h += currenciesBlock(sum);
 
     for (const cf of sum.credit) h += creditCardBlock(cf);
     if (ds.cashback && typeof ds.cashback === 'object') {
@@ -2641,13 +2716,14 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 
     h += `<div class="section-title"><span>${esc(monthLabel(mp.month))}</span><button class="link" data-act="page" data-tab="mais" data-page="relatorios">Relatórios</button></div>
       <div class="stat-grid">
-        <div class="stat"><div class="k">Entradas confirmadas</div><div class="v" style="color:var(--pos)">${M(conf.in)}</div><div class="s">lançadas no app</div></div>
-        <div class="stat"><div class="k">Despesas confirmadas</div><div class="v">${M(conf.out)}</div><div class="s">${mt.credit ? 'inclui ' + esc(money(mt.credit)) + ' no crédito' : 'lançadas no app'}</div></div>
+        <div class="stat"><div class="k">Entradas confirmadas</div><div class="v" style="color:var(--pos)">${M(conf.in, MC)}</div><div class="s">lançadas no app</div></div>
+        <div class="stat"><div class="k">Despesas confirmadas</div><div class="v">${M(conf.out, MC)}</div><div class="s">${mt.credit ? 'inclui ' + esc(money(mt.credit)) + ' no crédito' : 'lançadas no app'}</div></div>
       </div>`;
-    if (prev.in || prev.out) h += `<div class="notice info">${ic('clock')}<div class="ntext"><b>Previsto, ainda não aplicado:</b> entradas ${M(prev.in)} · saídas ${M(prev.out)}.</div></div>`;
+    if (prev.in || prev.out) h += `<div class="notice info">${ic('clock')}<div class="ntext"><b>Previsto, ainda não aplicado:</b> entradas ${M(prev.in, MC)} · saídas ${M(prev.out, MC)}.</div></div>`;
+    if (conf.noRate.length) h += `<p class="small muted" style="margin:-4px 4px 12px">Fora dos totais por falta de cotação: ${conf.noRate.map(x => esc('+' + money(x.in, x.currency) + ' / −' + money(x.out, x.currency))).join(' · ')}.</p>`;
     if (hist) h += `<p class="small muted" style="margin:-4px 4px 12px">Resumo histórico do mês: ${M(C.num(hist.data.paid_total_brl))} pagos até ${fdate(ds.snapshot_date)} (informado no backup, já dentro dos saldos de corte).</p>`;
-    const paidTot = C.sumObligationsBRL(ob.paid, false), openTot = C.sumObligationsBRL(ob.open, true);
-    h += `<button class="card row-item" style="border:0;width:100%" data-act="tab" data-tab="contas"><div class="main"><div class="t">Contas do mês</div><div class="s">${ob.paid.length} paga(s) · ${ob.open.length} em aberto${ob.undated.length ? ' · ' + ob.undated.length + ' sem data' : ''}</div></div><div class="amt"><span class="money" style="color:var(--pos)">${esc(money(paidTot))}</span><div class="s"><span class="money">${esc(money(openTot))} em aberto</span></div></div>${ic('right', 'chev')}</button>`;
+    const paidTot = C.sumObligations(ob.paid, false, ds), openTot = C.sumObligations(ob.open, true, ds);
+    h += `<button class="card row-item" style="border:0;width:100%" data-act="tab" data-tab="contas"><div class="main"><div class="t">Contas do mês</div><div class="s">${ob.paid.length} paga(s) · ${ob.open.length} em aberto${ob.undated.length ? ' · ' + ob.undated.length + ' sem data' : ''}</div></div><div class="amt"><span class="money" style="color:var(--pos)">${esc(money(paidTot, MC))}</span><div class="s"><span class="money">${esc(money(openTot, MC))} em aberto</span></div></div>${ic('right', 'chev')}</button>`;
 
     const next = sum.upcoming.slice(0, 4);
     h += `<div class="section-title"><span>Próximos vencimentos</span><button class="link" data-act="tab" data-tab="contas">Ver todos</button></div><div class="card">`;
@@ -2749,8 +2825,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${d.confirmed ? `<div class="bar" style="height:${Math.max(3, d.confirmed / max * 100)}%"></div>` : ''}
         <div class="bl">${monthLabel(d.month, true)}</div></div>`;
     }
-    const eurM = data.filter(d => d.otherCurrency);
-    h += `</div>${eurM.length ? `<div class="tiny muted" style="margin-top:8px">Valores em reais. Gastos em euro ficam fora do gráfico: ${eurM.map(d => esc(monthLabel(d.month, true)) + ' ' + esc(money(d.otherCurrency, 'EUR'))).join(' · ')}.</div>` : ''}<div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
+    const MC = C.mainCurrency(ds), nr = data.filter(d => Object.keys(d.noRate || {}).length);
+    h += `</div><div class="tiny muted" style="margin-top:8px">Valores em ${esc(curName(MC))}${C.summarize(ds).currencies.length > 1 ? ', outras moedas convertidas pela cotação informada' : ''}.${nr.length ? ' Sem cotação, fora do gráfico: ' + nr.map(d => esc(monthLabel(d.month, true)) + ' ' + Object.entries(d.noRate).map(([c, v]) => esc(money(v, c))).join(' + ')).join(' · ') + '.' : ''}</div><div class="tiny muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap"><span><span class="dot" style="display:inline-block;background:var(--accent)"></span> lançamentos confirmados</span><span><span class="dot" style="display:inline-block;border:1.5px solid var(--ink-3)"></span> resumo histórico (informativo)</span></div></div>`;
     return h;
   }
 
@@ -3101,7 +3177,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     if (/emprest|cartao|reneg|facil|dm_|_dm|juros/.test(n)) return 'Banco/Dívidas';
     if (/aluguel|enel|agua|internet|chip|claro|imobil|advog/.test(n)) return 'Casa';
     if (/psn|icloud|stream|assinat/.test(n)) return 'Lazer/Assinaturas';
-    if (/passaporte|espanha|viagem/.test(n)) return 'Viagem/Espanha';
+    if (/passaporte|espanha|viagem/.test(n)) return 'Viagem';
     if (/leite|mercado|aliment/.test(n)) return 'Alimentação/Compras';
     if (/saude|remed|medic/.test(n)) return 'Saúde/Emergências';
     if (/transport|uber|perua/.test(n)) return 'Transporte';
@@ -3141,8 +3217,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function viewContas() {
     const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
     let h = `<h1 class="page-title">Contas a pagar</h1>
-      <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned)}</div><div class="s">ainda por vir</div></div></div>`;
-    if (sum.openOtherCurrency.length) h += `<div class="notice info">${ic('info')}<div class="ntext">Os totais acima são em reais. Fora deles, em outra moeda: ${sum.openOtherCurrency.map(o => esc(obligationTitle(o)) + ' (' + esc(money(C.openAmountOf(o), C.currencyOf(o, ds))) + ')').join(', ')}.</div></div>`;
+      <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending, sum.mainCurrency)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned, sum.mainCurrency)}</div><div class="s">ainda por vir</div></div></div>`;
+    if (sum.openNoRate.length) h += `<div class="notice info">${ic('info')}<div class="ntext">Totais em ${esc(curName(sum.mainCurrency))}. Fora deles, por falta de cotação: ${sum.openNoRate.map(o => esc(obligationTitle(o)) + ' (' + esc(money(C.openAmountOf(o), C.currencyOf(o, ds))) + ')').join(', ')}. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>Vencimento passado:</b> ${sum.overdue.map(o => esc(obligationTitle(o))).join(', ')}. Se já pagou, toque na conta e registre o pagamento.</div></div>`;
     const months = Object.keys(sum.byMonth).sort((a, b) => a === 'sem-data' ? 1 : b === 'sem-data' ? -1 : a.localeCompare(b));
     if (!months.length) h += `<div class="card empty"><div class="e-ico">✅</div>Nenhuma conta em aberto.</div>`;
@@ -3275,6 +3351,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   function viewMais() {
     const items = [
       ['backup', 'db', 'Backup e restauração', S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')],
+      ['moedas', 'scale', 'Moedas e câmbio', 'moeda principal ' + C.mainCurrency(S.ds) + (C.summarize(S.ds).missingRates.length ? ' · <span class="badge warn">falta cotação</span>' : '')],
       ['docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'],
       ['relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'],
       ['agenda', 'cal', 'Agenda', 'calendário e linha do tempo'],
@@ -3452,6 +3529,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         ${b.unknown ? `<div class="notice warn">${ic('alert')}<div class="ntext">O saldo desta conta não foi informado. O app não estima valores: ela fica fora dos totais até receber um saldo de corte no backup.</div></div>` : ''}
         ${b.protected ? `<div class="notice info">${ic('lock')}<div class="ntext">Conta protegida: não entra no “disponível em conta”. Usar só com autorização.</div></div>` : ''}
         <div class="section-title"><span>Lançamentos</span></div><div class="card">${txs.length ? '<div class="rows">' + txs.map(txRow).join('') + '</div>' : '<div class="muted small">Nenhum lançamento depois do corte.</div>'}</div>
+        <button class="btn secondary" data-act="acc-edit" data-id="${esc(id)}">Editar conta (banco, moeda, saldo)</button>
         <details class="card fold"><summary>Dados brutos da conta</summary><div style="margin-top:8px">${renderValue(acc)}</div></details>`
     });
     sh.body.addEventListener('click', e => { const r = e.target.closest('[data-act="tx-edit"]'); if (r) { sh.close(); } });
@@ -3677,7 +3755,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       title: 'Conferência pós-importação', full: true,
       body: `<div class="notice ok">${ic('check')}<div class="ntext"><b>Importação concluída.</b> ${esc(desc)}.</div></div>
         <div class="card"><div class="lbl">Confira com os apps dos bancos</div><div class="rows">${after.balances.map(b => `<div class="row-item"><div class="main"><div class="t">${esc(b.name)}</div><div class="s">${b.unknown ? 'saldo desconhecido' : 'corte ' + esc(money(b.snapshot, b.currency)) + (b.txCount ? ' + ' + b.txCount + ' lançamento(s)' : '')}</div></div><div class="amt">${b.balance === null ? '—' : M(b.balance, b.currency)}</div></div>`).join('')}</div></div>
-        <div class="card"><dl class="kv">${row('Disponível em conta', before && before.cashBRL, after.cashBRL)}${row('Reserva protegida', before && before.protectedBRL, after.protectedBRL)}${row('Euros (Espanha)', before && before.eur, after.eur, 'EUR')}${row('A pagar pendente', before && before.openPending, after.openPending)}${row('A pagar planejado', before && before.openPlanned, after.openPlanned)}</dl></div>
+        <div class="card"><dl class="kv">${row('Disponível em conta', before && before.freeMain, after.freeMain, after.mainCurrency)}${row('Reservas', before && before.protectedMain, after.protectedMain, after.mainCurrency)}${row('Patrimônio total', before && before.totalMain, after.totalMain, after.mainCurrency)}${row('A pagar pendente', before && before.openPending, after.openPending)}${row('A pagar planejado', before && before.openPlanned, after.openPlanned)}</dl></div>
         <div class="notice warn">${ic('alert')}<div class="ntext"><b>Próximo passo:</b> exporte um backup agora e guarde em dois lugares. ${S.ds && (S.ds.audit_log || []).length ? '' : ''}</div></div>`,
       footHtml: `<button class="btn" data-exp>${ic('down')} Exportar backup agora</button><button class="btn secondary" data-close>Depois</button>`
     });
@@ -3740,6 +3818,165 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!srcDs) { await saveMeta({ last_export_at: nowIso(), last_export_name: name, dirty: false, export_base: C.makeBase(ds), base_source: 'exportação' }); render(); }
       toast(srcDs ? 'Cópia exportada' : 'Backup exportado. Guarde em dois lugares.');
     });
+  }
+
+  // ---------- MOEDAS, CÂMBIO E CADASTRO DE CONTAS ----------
+  const COMMON_CURRENCIES = ['BRL', 'USD', 'EUR', 'GBP', 'ARS', 'CLP', 'UYU', 'PYG', 'COP', 'PEN', 'MXN', 'CAD', 'AUD', 'CHF', 'JPY', 'CNY'];
+  const BANKS = ['Nubank', 'Itaú', 'Bradesco', 'Banco do Brasil', 'Caixa', 'Santander', 'Inter', 'C6 Bank', 'BTG Pactual', 'XP', 'Mercado Pago', 'PicPay', 'PagBank', 'Sicoob', 'Sicredi', 'Banrisul', 'Neon', 'Safra', 'InfinitePay', 'Revolut', 'Wise', 'Nomad', 'Avenue', 'N26'];
+  function currencyOptions(selected) {
+    let all = [];
+    try { all = Intl.supportedValuesOf('currency'); } catch (e) { all = []; }
+    const rest = all.filter(c => !COMMON_CURRENCIES.includes(c));
+    const opt = c => `<option value="${c}" ${c === selected ? 'selected' : ''}>${c} · ${esc(curName(c))}</option>`;
+    return `<optgroup label="Mais usadas">${COMMON_CURRENCIES.map(opt).join('')}</optgroup>` + (rest.length ? `<optgroup label="Todas">${rest.map(opt).join('')}</optgroup>` : '');
+  }
+  // Moedas que aparecem nos dados (contas, lançamentos, contas a pagar), exceto a principal.
+  function currenciesInUse(ds) {
+    const set = new Set();
+    (ds.accounts || []).forEach(a => a && a.currency && set.add(String(a.currency).toUpperCase()));
+    (ds.transactions || []).forEach(t => t && t.currency && set.add(String(t.currency).toUpperCase()));
+    (ds.obligations || []).forEach(o => o && set.add(C.currencyOf(o, ds)));
+    const rates = (ds.settings && ds.settings.exchange_rates) || {};
+    Object.keys(rates).forEach(c => set.add(c));
+    set.delete(C.mainCurrency(ds));
+    return Array.from(set).sort();
+  }
+  function pageMoedas() {
+    const ds = S.ds, MC = C.mainCurrency(ds), rates = (ds.settings && ds.settings.exchange_rates) || {};
+    const used = currenciesInUse(ds);
+    let h = backBar('Mais', 'mais') + `<h1 class="page-title">Moedas e câmbio</h1>
+      <div class="card"><div class="lbl">Moeda principal</div>
+        <div style="font-size:20px;font-weight:700;margin:2px 0 4px">${esc(MC)} · ${esc(curName(MC))}</div>
+        <p class="small muted" style="margin:0 0 10px">O patrimônio total e os resumos aparecem nesta moeda. Contas em outras moedas são convertidas pela cotação abaixo.</p>
+        <button class="btn secondary" data-act="cur-main">Trocar moeda principal</button></div>
+      <div class="section-title"><span>Cotações</span></div>`;
+    if (!used.length) h += `<div class="card muted small">Todas as contas estão em ${esc(MC)}. Quando você cadastrar uma conta em outra moeda, a cotação dela aparece aqui.</div>`;
+    else {
+      h += `<div class="card">` + used.map(c => {
+        const r = rates[c]; const v = C.num(r && typeof r === 'object' ? r.rate : r);
+        return `<div class="field"><label for="rate-${c}">1 ${esc(c)} (${esc(curName(c))}) vale quantos ${esc(MC)}?</label>
+          <input class="input num" id="rate-${c}" data-rate="${c}" inputmode="decimal" placeholder="ex.: 6,20" value="${v > 0 ? esc(String(v).replace('.', ',')) : ''}">
+          <p class="help">${v > 0 ? 'Atualizada em ' + (r && r.updated_at ? fdatetime(r.updated_at) : 'data desconhecida') : '<b style="color:var(--warn)">Sem cotação:</b> esta moeda fica fora do patrimônio total.'}</p></div>`;
+      }).join('') + `<button class="btn" data-act="rates-save">${ic('check')} Salvar cotações</button>
+        <p class="help" style="margin-top:10px">O app não busca cotação na internet: você digita. Use a do seu banco ou corretora (é a que vale para você). Deixe em branco para tirar a moeda do total.</p></div>`;
+    }
+    return h;
+  }
+  async function saveRates() {
+    const ds2 = C.clone(S.ds), now = nowIso();
+    ds2.settings = Object.assign({}, ds2.settings || {});
+    const rates = Object.assign({}, ds2.settings.exchange_rates || {});
+    const changed = [];
+    for (const inp of document.querySelectorAll('[data-rate]')) {
+      const c = inp.dataset.rate, raw = inp.value.trim();
+      const old = rates[c] && typeof rates[c] === 'object' ? C.num(rates[c].rate) : C.num(rates[c]);
+      if (!raw) { if (rates[c] !== undefined) { delete rates[c]; changed.push(c + ' removida'); } continue; }
+      const v = C.num(raw);
+      if (!(v > 0)) { showError('Cotação inválida', `Confira o valor de <b>${esc(c)}</b>. Use número maior que zero, ex.: 6,20.`); return; }
+      if (v !== old) { rates[c] = { rate: v, updated_at: now }; changed.push(`1 ${c} = ${String(v).replace('.', ',')} ${C.mainCurrency(ds2)}`); }
+    }
+    if (!changed.length) { toast('Nenhuma cotação mudou'); return; }
+    ds2.settings.exchange_rates = rates;
+    await commit(ds2, { audit: { type: 'exchange-rates', description: 'Cotações: ' + changed.join('; ') }, toast: 'Cotações salvas' });
+  }
+  function changeMainCurrency() {
+    const MC = C.mainCurrency(S.ds);
+    const sh = openSheet({
+      title: 'Moeda principal',
+      body: `<div class="field"><label for="mc-sel">Mostrar totais em</label><select class="input" id="mc-sel">${currencyOptions(MC)}</select></div>
+        <div class="notice warn">${ic('alert')}<div class="ntext">As cotações são relativas à moeda principal. Ao trocar, <b>todas as cotações são apagadas</b> e você digita de novo. Saldos e lançamentos não mudam.</div></div>`,
+      footHtml: `<button class="btn" data-ok>Trocar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const v = sh.body.querySelector('#mc-sel').value;
+      sh.close();
+      if (v === MC) return;
+      const ds2 = C.clone(S.ds);
+      ds2.settings = Object.assign({}, ds2.settings || {}, { main_currency: v, exchange_rates: {} });
+      await commit(ds2, { audit: { type: 'main-currency', description: `Moeda principal: ${MC} → ${v} (cotações zeradas)` }, toast: 'Moeda principal: ' + v });
+    };
+  }
+
+  function accountRefs(ds, id) {
+    return (ds.transactions || []).filter(t => t && (t.account_id === id || t.to_account_id === id)).length;
+  }
+  function openAccountForm(id) {
+    const ds = S.ds, acc = id ? (ds.accounts || []).find(a => a && a.id === id) : null;
+    if (id && !acc) return;
+    const refs = acc ? accountRefs(ds, id) : 0;
+    const cur = acc ? String(acc.currency || C.mainCurrency(ds)).toUpperCase() : C.mainCurrency(ds);
+    const snap = acc && acc.snapshot_balance != null ? C.num(acc.snapshot_balance) : null;
+    const isRes = acc ? /protegid|espanha|reserva/.test(C.norm(acc.status)) : false;
+    const sh = openSheet({
+      title: acc ? 'Editar conta' : 'Nova conta',
+      body: `<div class="field"><label for="a-bank">Banco ou instituição</label><input class="input" id="a-bank" list="a-banks" autocomplete="off" placeholder="ex.: Nubank" value="${esc(acc ? (acc.institution || acc.name || '') : '')}"><datalist id="a-banks">${BANKS.map(b => `<option value="${esc(b)}">`).join('')}</datalist></div>
+        <div class="field"><label for="a-name">Apelido (opcional)</label><input class="input" id="a-name" autocomplete="off" placeholder="ex.: Conta salário, Reserva viagem" value="${esc(acc && acc.institution && acc.name !== acc.institution ? acc.name : '')}"></div>
+        <div class="field"><label for="a-cur">Moeda da conta</label><select class="input" id="a-cur" ${refs ? 'disabled' : ''}>${currencyOptions(cur)}</select>
+          ${refs ? `<p class="help">Não dá para trocar a moeda: a conta já tem ${refs} lançamento(s) nessa moeda.</p>` : ''}</div>
+        <div class="two"><div class="field"><label for="a-bal">Saldo</label><input class="input num" id="a-bal" inputmode="decimal" placeholder="0,00" value="${snap === null || isNaN(snap) ? '' : esc(String(snap).replace('.', ','))}"></div>
+          <div class="field"><label for="a-date">Saldo do dia</label><input class="input" id="a-date" type="date" value="${esc(acc ? (C.dateOnly(acc.snapshot_date) || C.dateOnly(ds.snapshot_date) || todayStr()) : todayStr())}"></div></div>
+        <p class="help" style="margin-top:-6px">Saldo no <b>fim do dia</b> informado, como aparece no app do banco. Lançamentos confirmados <b>depois</b> dessa data são somados automaticamente.${acc ? ' Deixe vazio se não souber (a conta fica fora dos totais).' : ''}</p>
+        <label class="check"><input type="checkbox" id="a-res" ${isRes ? 'checked' : ''}><div><b>É uma reserva</b><div class="small muted">Dinheiro guardado (emergência, viagem, investimento). Entra no patrimônio, mas não no “disponível em conta”.</div></div></label>
+        <div id="a-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<button class="btn" data-ok>${acc ? 'Salvar alterações' : 'Cadastrar conta'}</button>${acc ? `<button class="btn ghost" data-del style="color:var(--danger)">Excluir conta</button>` : ''}`
+    });
+    const q = sel => sh.body.querySelector(sel);
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const bank = q('#a-bank').value.trim(), nick = q('#a-name').value.trim(), rawBal = q('#a-bal').value.trim();
+      const date = q('#a-date').value, currency = q('#a-cur').value, res = q('#a-res').checked;
+      const err = m => { q('#a-err').textContent = m; };
+      if (!bank) return err('Informe o banco ou instituição.');
+      const bal = rawBal ? C.num(rawBal) : null;
+      if (rawBal && isNaN(bal)) return err('Saldo inválido. Use números, ex.: 1.234,56 ou -50.');
+      if (!acc && bal === null) return err('Informe o saldo atual (pode ser 0).');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('Informe a data do saldo.');
+      const ds2 = C.clone(S.ds), now = nowIso();
+      if (!Array.isArray(ds2.accounts)) ds2.accounts = [];
+      let a;
+      if (acc) a = ds2.accounts.find(x => x && x.id === acc.id);
+      else {
+        const slug = C.norm(bank).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'conta';
+        a = { id: `acc-${slug}-${rand(2)}`, type: 'banco', origin: 'usuario', created_at: now };
+        ds2.accounts.push(a);
+      }
+      const prevStatus = a.status;
+      Object.assign(a, { name: nick || bank, institution: bank, snapshot_balance: bal === null ? null : C.round2(bal), snapshot_date: date, updated_at: now });
+      if (!refs) a.currency = currency;
+      a.status = res ? (/protegid|espanha|reserva/.test(C.norm(prevStatus)) ? prevStatus : 'reserva') : (/protegid|espanha|reserva/.test(C.norm(prevStatus)) || !prevStatus ? 'operacional' : prevStatus);
+      if (!ds2.snapshot_date) ds2.snapshot_date = date;
+      sh.close();
+      const desc = acc ? `Conta editada: ${a.name}` : `Conta cadastrada: ${a.name} (${a.currency})`;
+      await commit(ds2, { audit: { type: acc ? 'account-edit' : 'account-create', description: desc + (bal === null ? '' : ` · saldo ${money(a.snapshot_balance, a.currency)} em ${fdate(date)}`), extra: { record_id: a.id } }, backupReason: acc ? 'Antes de editar a conta ' + acc.name : null, toast: acc ? 'Conta atualizada' : 'Conta cadastrada' });
+      if (!acc && a.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, a.currency) === null) toast(`Informe a cotação de ${a.currency} em Mais → Moedas e câmbio`, 'Abrir', () => go('mais', 'moedas'), 6000);
+    };
+    const del = sh.foot.querySelector('[data-del]');
+    if (del) del.onclick = async () => {
+      if (refs) { sh.close(); showError('Não dá para excluir', `A conta <b>${esc(acc.name)}</b> tem ${refs} lançamento(s). Excluir faria esses lançamentos apontarem para uma conta que não existe. Se a conta não é mais usada, zere o saldo ou exclua os lançamentos antes.`); return; }
+      sh.close();
+      if (!(await confirmDialog({ title: 'Excluir conta?', text: `<b>${esc(acc.name)}</b> sai dos saldos. Fica guardada em “Registros excluídos” e no histórico.`, ok: 'Excluir', danger: true }))) return;
+      const ds2 = C.clone(S.ds), now = nowIso();
+      ds2.accounts = ds2.accounts.filter(x => !(x && x.id === acc.id));
+      if (!Array.isArray(ds2.deleted_records)) ds2.deleted_records = [];
+      ds2.deleted_records.push({ id: 'del-' + Date.now().toString(36) + rand(2), collection: 'accounts', record_id: acc.id, deleted_at: now, record: C.clone(acc) });
+      await commit(ds2, { audit: { type: 'account-delete', description: 'Conta excluída: ' + acc.name, extra: { record_id: acc.id } }, backupReason: 'Antes de excluir a conta ' + acc.name, toast: 'Conta excluída' });
+    };
+  }
+  // Primeiro uso sem backup: começa com dados vazios.
+  async function startFresh() {
+    const sh = openSheet({
+      title: 'Começar do zero',
+      body: `<p class="small">Você vai cadastrar suas contas (banco, moeda e saldo) direto no app.</p>
+        <div class="field"><label for="fr-cur">Moeda principal</label><select class="input" id="fr-cur">${currencyOptions('BRL')}</select><p class="help">Os totais aparecem nesta moeda. Dá para trocar depois.</p></div>`,
+      footHtml: `<button class="btn" data-ok>Começar</button>`
+    });
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const cur = sh.body.querySelector('#fr-cur').value, today = todayStr();
+      sh.close();
+      const ds = { schema_version: C.APP_SCHEMA, source: 'cadastro no app', snapshot_date: today, currency_default: cur, settings: { main_currency: cur, exchange_rates: {} }, accounts: [], credit_facilities: [], transactions: [], obligations: [], audit_log: [], deleted_records: [] };
+      await commit(ds, { audit: { type: 'start', description: 'Início do zero, moeda principal ' + cur } });
+      go('inicio');
+      openAccountForm(null);
+    };
   }
 
   // ---------- BACKUP NO GITHUB ----------
@@ -4241,7 +4478,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       <div class="card">${cat.rows.length ? cat.rows.map(x => `<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:14px"><span>${catIcon(x.cat, '•')} ${esc(x.cat)}</span><b class="money">${esc(money(x.total))}</b></div><div class="progress"><div style="width:${x.total / max * 100}%"></div></div>${x.hist && x.after ? `<div class="tiny muted">resumo ${esc(money(x.hist))} + lançamentos ${esc(money(x.after))}</div>` : (x.hist ? '<div class="tiny muted">do resumo histórico</div>' : '')}</div>`).join('') : '<div class="muted small">Nenhuma despesa no período.</div>'}
       ${cat.notes.map(n => `<div class="tiny muted" style="margin-top:6px">${esc(n)}</div>`).join('')}</div>
       <div class="section-title"><span>Contas do período</span></div>
-      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(C.sumObligationsBRL(ob.paid, false))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(C.sumObligationsBRL(ob.open, true))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
+      <div class="card"><dl class="kv"><dt>Pagas</dt><dd>${ob.paid.length} · ${M(C.sumObligations(ob.paid, false, ds))}</dd><dt>Em aberto</dt><dd>${ob.open.length} · ${M(C.sumObligations(ob.open, true, ds))}</dd><dt>Sem data (todas)</dt><dd>${ob.undated.length}</dd></dl></div>
       ${Object.keys(tot.byAccount).length ? `<div class="section-title"><span>Despesas por conta</span></div><div class="card"><dl class="kv">${Object.entries(tot.byAccount).map(([k, v]) => `<dt>${esc(accountName(k))}</dt><dd>${M(C.round2(v))}</dd>`).join('')}</dl></div>` : ''}
       <button class="btn" data-act="rep-doc">${ic('down')} Gerar documento deste período</button>
       <p class="tiny muted" style="margin-top:10px">Os totais atualizam na hora a cada lançamento. Antes da data de corte (${fdate(ds.snapshot_date)}) só existem os resumos informados no backup.</p>`;
@@ -4251,7 +4488,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- eventos ----------
   const TABS = { inicio: viewInicio, extrato: viewExtrato, pergunte: viewPergunte, contas: viewContas, mais: viewMais };
   const PAGES = { backup: pageBackup, planejamento: pagePlanejamento, conciliacao: pageConciliacao, auditoria: pageAuditoria, dados: pageDados, seguranca: pageSeguranca, sobre: pageSobre,
-    docs: pageDocs, relatorios: pageRelatorios, github: pageGithub, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
+    docs: pageDocs, relatorios: pageRelatorios, github: pageGithub, moedas: pageMoedas, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
   const ACTIONS = {
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
@@ -4259,6 +4496,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
     'gh-save': () => ghSaveConfig(),
+    'acc-new': () => openAccountForm(null),
+    'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
+    'cur-main': () => changeMainCurrency(),
+    'rates-save': () => saveRates(),
+    'fresh': () => startFresh(),
     'gh-push': () => ghPush(),
     'gh-pull': () => ghPull(),
     'gh-disconnect': () => ghDisconnect(),
