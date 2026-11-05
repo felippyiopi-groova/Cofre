@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-wuGU4SdC5FE0Eyw1hblXfiiAVsMA+7JiWZH0hBt2Om8='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-f6jrb+EAI5IzWh3/wSGjrsm86T36oZmd9+U097c0qc0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -412,7 +412,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
 
   // Chaves de metadados gerados pelo app: ignoradas na comparação/importação.
   const META_KEYS = new Set([
-    'schema_version', 'exported_at', 'integrity', 'calculated_balances',
+    'schema_version', 'exported_at', 'integrity', 'calculated_balances', 'calculated_traffic_light',
     'app', 'format_guide', 'backup_id', 'sync'
   ]);
 
@@ -596,17 +596,6 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     }
     if (!Array.isArray(ds.transactions)) ds.transactions = [];
     if (!Array.isArray(ds.deleted_records)) ds.deleted_records = [];
-
-    // Semáforo: se não houver campo próprio, derivar da regra textual (sem inventar).
-    if (!isObj(ds.traffic_light) && Array.isArray(ds.rules)) {
-      for (const r of ds.rules) {
-        const m = typeof r === 'string' && r.match(/sem[aá]foro[^:]*:\s*(verde|amarelo|laranja|vermelho)/i);
-        if (m) {
-          ds.traffic_light = { level: m[1].toUpperCase(), date: ds.snapshot_date || null, source: 'derivado das regras do backup' };
-          break;
-        }
-      }
-    }
 
     // IDs automáticos determinísticos para itens de coleção sem ID (reimportar = mesmo ID).
     let autoIds = 0;
@@ -1117,7 +1106,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'Transferência entre contas próprias: type "transferencia", "account_id" = origem, "to_account_id" = destino ("amount_to" se a moeda for diferente). Não é receita nem despesa.',
     'Para quitar uma conta a pagar: mude o "status" dela para "pago", preencha "paid_transaction_id" e crie o lançamento com "obligation_id". Não registre o mesmo pagamento duas vezes.',
     'Não apague registros: mude o status (ex.: "cancelado"). Itens excluídos no app aparecem em "deleted_records" e não devem ser recriados.',
-    '"calculated_balances", "integrity", "app" e "format_guide" são gerados pelo app e ignorados na importação.',
+    '"calculated_balances", "calculated_traffic_light", "integrity", "app" e "format_guide" são gerados pelo app e ignorados na importação.',
+    'Semáforo de liquidez: o app CALCULA sozinho (veja "calculated_traffic_light"); não grave "traffic_light". Para mudar o critério, ajuste "settings.traffic_light_rules": "dias" (janela de contas a pagar, padrão 30), "dias_urgente" (padrão 7) e "meses_folga_verde" (meses de gasto médio que precisam sobrar para ficar VERDE, padrão 1).',
     'Atualize "exported_at" com a data/hora da sua versão.'
   ];
 
@@ -1131,6 +1121,67 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     for (const k of Object.keys(ds)) if (!META_KEYS.has(k)) c[k] = ds[k];
     return stable(c);
   }
+  // ---------- semáforo de liquidez (automático) ----------
+  // Calculado só a partir dos dados: ninguém escolhe a cor, então todos os aparelhos mostram a mesma.
+  // Regras (podem ser ajustadas pelo ChatGPT em settings.traffic_light_rules):
+  //   folga = disponível em conta − contas a pagar nos próximos N dias (sem contar o que ainda vai entrar)
+  //   VERMELHO: nem com as receitas previstas do período dá para pagar tudo, ou o disponível não cobre o que vence em 7 dias
+  //   LARANJA:  só fecha se as receitas previstas entrarem
+  //   AMARELO:  fecha, mas a folga é menor que X meses de gastos (média dos últimos 3 meses)
+  //   VERDE:    fecha e sobra pelo menos X meses de gastos
+  const TL_DEFAULTS = { dias: 30, dias_urgente: 7, meses_folga_verde: 1 };
+  function addDaysIso(ymd, k) { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); }
+  function trafficLight(ds, today) {
+    today = today || new Date().toISOString().slice(0, 10);
+    const st = isObj(ds && ds.settings) && isObj(ds.settings.traffic_light_rules) ? ds.settings.traffic_light_rules : {};
+    const R = {}; for (const k of Object.keys(TL_DEFAULTS)) { const v = num(st[k]); R[k] = v > 0 && isFinite(v) ? v : TL_DEFAULTS[k]; }
+    const end = addDaysIso(today, Math.round(R.dias)), urgent = addDaysIso(today, Math.round(R.dias_urgente));
+    const s = summarize(ds, today), main = s.mainCurrency;
+    const free = round2(s.freeMain || 0);
+    let pay = 0, payUrgent = 0, overdue = 0, noDate = 0, noRate = 0, inc = 0;
+    for (const o of (ds.obligations || [])) {
+      if (!isObj(o) || !isObligationOpen(o)) continue;
+      const v = toMain(openAmountOf(o), currencyOf(o, ds), ds); if (v === null || isNaN(v)) { noRate++; continue; }
+      const d = dateOnly(o.due_date); if (!d) { noDate++; continue; }
+      if (d <= end) pay += v; if (d <= urgent) payUrgent += v; if (d < today) overdue++;
+    }
+    // Lançamentos planejados no período (ainda não mexem no saldo).
+    for (const t of (ds.transactions || [])) {
+      if (!isObj(t) || txStatus(t) === 'confirmado') continue;
+      const d = dateOnly(t.date); if (!d || d > end) continue;
+      const v = toMain(num(t.amount) || 0, txCurrency(t, ds), ds); if (v === null) { noRate++; continue; }
+      if (txType(t) === 'despesa' && !t.obligation_id) { pay += v; if (d <= urgent) payUrgent += v; }
+      else if (txType(t) === 'receita') inc += v;
+    }
+    for (const r of (ds.income_forecasts || [])) {
+      if (!isObj(r) || /recebid|cancelad|pago/.test(norm(r.status))) continue;
+      const v = toMain(amountOf(r), currencyOf(r, ds), ds); if (v === null || isNaN(v)) continue;
+      let d = dateOnly(r.date);
+      if (!d && r.expected_day && /mensal/.test(norm(r.frequency))) {
+        const day = Math.min(28, Math.max(1, Math.round(+r.expected_day))); let yy = +today.slice(0, 4), mm = +today.slice(5, 7);
+        if (day < +today.slice(8, 10)) { mm++; if (mm > 12) { mm = 1; yy++; } }
+        d = `${yy}-${String(mm).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+      if (d && d >= today && d <= end) inc += v;
+    }
+    // Gasto médio mensal: 3 meses completos antes do mês atual.
+    const ms = monthlyExpenses(ds).filter(m => m.month < today.slice(0, 7)).slice(-3);
+    const avg = ms.length ? round2(ms.reduce((a, m) => a + m.confirmed, 0) / ms.length) : 0;
+    pay = round2(pay); payUrgent = round2(payUrgent); inc = round2(inc);
+    const folga = round2(free - pay), comPrevistas = round2(folga + inc), alvo = round2(avg * R.meses_folga_verde);
+    let level, why;
+    if (comPrevistas < 0) { level = 'VERMELHO'; why = `Mesmo com o que está previsto para entrar, não dá para pagar tudo o que vence nos próximos ${R.dias} dias.`; }
+    else if (free < payUrgent) { level = 'VERMELHO'; why = `O disponível em conta não cobre o que vence nos próximos ${R.dias_urgente} dias.`; }
+    else if (folga < 0) { level = 'LARANJA'; why = `As contas dos próximos ${R.dias} dias só fecham se as receitas previstas entrarem.`; }
+    else if (avg > 0 && folga < alvo) { level = 'AMARELO'; why = `As contas fecham, mas a sobra é menor que ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gastos.`; }
+    else { level = 'VERDE'; why = avg > 0 ? `As contas fecham e sobra pelo menos ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gastos.` : `As contas dos próximos ${R.dias} dias fecham com o disponível.`; }
+    const partial = [];
+    if (s.unknownAccounts.length) partial.push(`${s.unknownAccounts.length} conta(s) sem saldo informado`);
+    if (s.missingRates.length || noRate) partial.push('valores sem cotação');
+    if (noDate) partial.push(`${noDate} conta(s) a pagar sem data`);
+    return { level, why, currency: main, today, rules: R, free, pay, payUrgent, inc, folga, comPrevistas, avgMonthly: avg, months: ms.length, overdue, partial };
+  }
+
   async function buildExport(ds, nowIso, opts) {
     opts = opts || {};
     const sum = summarize(ds, (nowIso || '').slice(0, 10));
@@ -1142,6 +1193,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       format_guide: FORMAT_GUIDE
     };
     for (const k of Object.keys(ds)) if (!META_KEYS.has(k)) out[k] = clone(ds[k]);
+    { const tl = trafficLight(ds, (nowIso || '').slice(0, 10));
+      out.calculated_traffic_light = { note: 'Calculado pelo app a partir dos dados (não editável). Para mudar as regras, ajuste settings.traffic_light_rules: dias, dias_urgente, meses_folga_verde.', level: tl.level, reason: tl.why, currency: tl.currency, free_in_accounts: tl.free, due_in_period: tl.pay, due_urgent: tl.payUrgent, expected_income_in_period: tl.inc, slack: tl.folga, avg_monthly_expenses: tl.avgMonthly, rules: tl.rules, partial: tl.partial }; }
     out.calculated_balances = {
       note: 'Gerado pelo app: snapshot + lançamentos confirmados posteriores ao corte. Ignorado na importação.',
       calculated_at: nowIso,
@@ -1201,7 +1254,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
     norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
     parseLenient, prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
-    computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
+    computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount, trafficLight, TL_DEFAULTS,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
     encryptText, decryptText, isEncrypted, b64, fnv
   };
@@ -1850,7 +1903,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const p = R.periodRange('mes', month + '-01');
     const s = C.summarize(ds, today());
     const cat = categoryRows(ds, p.start, p.end);
-    const tl = ds.traffic_light && ds.traffic_light.level ? String(ds.traffic_light.level).toUpperCase() : null;
+    const tl = C.trafficLight(ds, today()).level;
     const m = baseModel('familia', 'Resumo Financeiro da Família', p.label, [['Mês', p.label], ['Semáforo', tl || 'não definido']]);
     m.traffic = tl;
     m.sections.push({ type: 'kpis', items: [
@@ -2509,7 +2562,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
           notes: undated.length ? [`${undated.length} conta(s) em aberto não têm data de vencimento e não aparecem nesta lista.`] : [], actions: [{ label: 'Gerar demonstrativo', act: 'doc', params: { doc: 'debts', format: 'pdf' } }] };
       }
       case 'credit': return { kind: 'answer', title: 'Cartão de crédito', lines: s.credit.map(c => ({ label: C.displayName(c.name), value: 'Disponível ' + money(c.available), sub: `limite ${money(c.limit)} · utilizado ${money(c.used)}` })), notes: ['Limite de crédito não é dinheiro em caixa.'] };
-      case 'light': { const tl = ds.traffic_light; return { kind: 'answer', title: 'Semáforo de liquidez', total: tl && tl.level ? tl.level : 'não definido', totalLabel: tl && tl.date ? 'desde ' + fd(tl.date) : '', lines: [], notes: [] }; }
+      case 'light': { const tl = C.trafficLight(ds, today); const M = v => money(v, tl.currency); return { kind: 'answer', title: 'Semáforo de liquidez', total: tl.level, totalLabel: tl.why, lines: [{ label: 'Disponível em conta', value: M(tl.free) }, { label: `A pagar em ${tl.rules.dias} dias`, value: M(tl.pay) }, { label: 'Previsto para entrar', value: M(tl.inc) }, { label: 'Gasto médio por mês', value: tl.months ? M(tl.avgMonthly) : 'sem histórico' }], notes: tl.partial.length ? ['Cálculo parcial: ' + tl.partial.join(', ') + '.'] : [] }; }
       default: return null;
     }
   }
@@ -3678,9 +3731,8 @@ REGRAS
 
   // ---------- INÍCIO ----------
   function lightPill() {
-    const tl = S.ds.traffic_light;
-    const lvl = tl && tl.level ? String(tl.level).toUpperCase() : null;
-    return `<button class="light ${lvl || 'none'}" data-act="light" aria-label="Semáforo de liquidez: ${esc(lvl || 'não definido')}">${esc(lvl || 'SEM SEMÁFORO')}</button>`;
+    const lvl = C.trafficLight(S.ds, todayStr()).level;
+    return `<button class="light ${lvl}" data-act="light" aria-label="Semáforo de liquidez: ${esc(lvl)}">${esc(lvl)}</button>`;
   }
   // Nome da moeda em português (ex.: EUR → euro). Cai no código se o navegador não souber.
   let curNames;
@@ -5142,23 +5194,27 @@ REGRAS
 
   // ---------- semáforo ----------
   function editLight() {
-    const tl = S.ds.traffic_light || {};
-    const sh = openSheet({
-      title: 'Semáforo de liquidez',
-      body: `<p class="small muted">Registra a avaliação de caixa feita com o ChatGPT. O app não calcula sozinho: ele só guarda o que foi decidido.</p>
-        ${tl.level ? `<p class="small">Atual: <b>${esc(tl.level)}</b>${tl.date ? ' desde ' + fdate(tl.date) : ''} · origem: ${esc(tl.source || '—')}</p>` : ''}
-        <div style="display:grid;gap:8px">${['VERDE', 'AMARELO', 'LARANJA', 'VERMELHO'].map(l => `<button class="light ${l}" data-l="${l}" style="justify-content:center;padding:12px;font-size:15px">${l}</button>`).join('')}</div>
-        <div class="field" style="margin-top:12px"><label>Observação (opcional)</label><input class="input" id="tl-note" value=""></div>`,
-      foot: false
-    });
-    sh.body.querySelectorAll('[data-l]').forEach(b => b.onclick = async () => {
-      const ds2 = C.clone(S.ds);
-      const old = ds2.traffic_light && ds2.traffic_light.level;
-      ds2.traffic_light = { level: b.dataset.l, date: todayStr(), source: 'usuário (app)' };
-      const note = sh.body.querySelector('#tl-note').value.trim(); if (note) ds2.traffic_light.note = note;
-      sh.close();
-      await commit(ds2, { audit: { type: 'traffic-light', description: `Semáforo: ${old || '—'} → ${b.dataset.l}${note ? ' (' + note + ')' : ''}` }, toast: 'Semáforo atualizado' });
-    });
+    const tl = C.trafficLight(S.ds, todayStr()), MC = tl.currency, R = tl.rules;
+    const row = (k, v, strong) => `<dt>${k}</dt><dd>${strong ? '<b>' + v + '</b>' : v}</dd>`;
+    openSheet({ title: 'Semáforo de liquidez', foot: false, body: `
+      <div style="display:flex;justify-content:center;margin:2px 0 12px"><span class="light ${tl.level}" style="font-size:16px;padding:10px 22px">${tl.level}</span></div>
+      <p style="margin:0 0 12px;text-align:center">${esc(tl.why)}</p>
+      <div class="card" style="margin:0"><dl class="kv">
+        ${row('Disponível em conta', M(tl.free, MC))}
+        ${row(`A pagar em ${R.dias} dias`, '− ' + M(tl.pay, MC))}
+        ${row('Sobra sem contar entradas', M(tl.folga, MC), true)}
+        ${row('Previsto para entrar', '+ ' + M(tl.inc, MC))}
+        ${row('Sobra contando entradas', M(tl.comPrevistas, MC))}
+        ${row(`Vence em ${R.dias_urgente} dias`, M(tl.payUrgent, MC))}
+        ${row('Gasto médio por mês', tl.months ? M(tl.avgMonthly, MC) + ` <span class="muted small">(${tl.months} ${tl.months === 1 ? 'mês' : 'meses'})</span>` : '<span class="muted">sem histórico</span>')}
+      </dl></div>
+      ${tl.partial.length ? `<div class="notice warn" style="margin-top:12px">${ic('alert')}<div class="ntext small">Cálculo parcial: ${esc(tl.partial.join(', '))}.</div></div>` : ''}
+      <div class="card" style="margin-top:12px"><div class="lbl">Como a cor é decidida</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:4px">
+        <li><b style="color:var(--danger)">Vermelho</b>: nem com as entradas previstas dá para pagar o que vence em ${R.dias} dias, ou o disponível não cobre o que vence em ${R.dias_urgente} dias.</li>
+        <li><b style="color:#D9622B">Laranja</b>: só fecha se as entradas previstas acontecerem.</li>
+        <li><b style="color:var(--warn)">Amarelo</b>: fecha, mas sobra menos de ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gasto médio.</li>
+        <li><b style="color:var(--pos)">Verde</b>: fecha e sobra pelo menos ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gasto médio.</li></ul>
+        <p class="small muted" style="margin:8px 0 0">É calculado sozinho a partir dos dados, igual em todos os aparelhos: ninguém escolhe a cor. Para mudar o critério, peça ao ChatGPT para ajustar "traffic_light_rules" no backup.</p></div>` });
   }
 
   // ---------- IMPORTAÇÃO ----------
@@ -5345,7 +5401,7 @@ REGRAS
       let newDs, summary, type;
       if (first || mode === 'replace') { newDs = C.clone(prep.data); type = first ? 'import-initial' : 'import-replace'; summary = countsOf(newDs); }
       else { const r = C.applyMerge(S.ds, prep.data, d, dec); newDs = r.data; summary = r.summary; type = 'import-merge'; }
-      for (const k of ['integrity', 'calculated_balances', 'app', 'format_guide']) delete newDs[k];
+      for (const k of ['integrity', 'calculated_balances', 'calculated_traffic_light', 'app', 'format_guide']) delete newDs[k];
       const desc = first ? `Importação inicial de ${file.name}` : (mode === 'replace' ? `Substituição completa por ${file.name}` : `Mesclagem de ${file.name}: ${summary.added} novo(s), ${summary.updated} atualizado(s), ${summary.skipped} ignorado(s), ${summary.kept} mantido(s) como estavam`);
       // comprovantes do ZIP
       let restored = 0;
@@ -6445,15 +6501,46 @@ REGRAS
   async function wipe(fromLock) {
     const okd = await confirmDialog({ title: fromLock ? 'Esqueceu o PIN?' : 'Apagar tudo?', text: (fromLock ? 'Sem o PIN, a única opção é <b>apagar os dados deste aparelho</b> e depois importar seu último backup exportado.<br><br>' : '') + 'Isso apaga dados, cópias automáticas e comprovantes deste aparelho. <b>Não dá para desfazer.</b>', ok: 'Apagar tudo', danger: true, typeWord: 'APAGAR' });
     if (!okd) return false;
-    await syForget(); // senão a próxima sincronização apagaria os dados também na nuvem
+    await wipeLocal();
+    toast('Dados apagados deste aparelho');
+    return true;
+  }
+  // Apaga tudo deste aparelho (dados, cópias, comprovantes, chave da IA, login) e volta para a tela inicial.
+  async function wipeLocal() {
+    await syForget(); // antes de apagar: senão a próxima sincronização apagaria os dados também na nuvem
     const backups = await DB.listBackups();
     for (const b of backups) await DB.deleteBackup(b.id);
     await DB.clearFiles();
     try { await DB.set('ia_cfg', null); } catch (e) { /* ignora */ } S.ia = null;
     await DB.saveState(null, {});
-    S.ds = null; S.meta = {}; S.locked = false; go('inicio');
-    toast('Dados apagados deste aparelho');
-    return true;
+    S.ds = null; S.meta = {}; S.locked = false; S.syMode = 'login'; S.chat = []; S.pending = {};
+    S.sheets.slice().forEach(x => x.close());
+    go('inicio');
+  }
+  // Sair da conta: envia o que falta, avisa o que se perderia e apaga tudo deste aparelho.
+  async function syLogoutWipe() {
+    if (!syReady()) { // sem cofre na nuvem (aguardando aprovação ou acesso removido): os dados daqui não estão na nuvem, então não apaga
+      if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados deste aparelho <b>não estão</b> num cofre na nuvem, por isso continuam aqui. Para apagá-los, use Mais → Segurança → Apagar tudo deste aparelho.', ok: 'Sair' }))) return;
+      await syForget(); S.syMode = 'login'; go('inicio'); toast('Você saiu da conta.'); return;
+    }
+    const ds = S.ds, att = ((ds && ds.attachments_manifest) || []).length;
+    let pend = 0;
+    if (syReady() && ds && SY.state.role !== 'viewer') {
+      toast('Enviando o que falta para a nuvem…');
+      try { await syRun(false); } catch (e) { /* conferido abaixo */ }
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      try { const withIa = Object.assign({}, S.ds || {}); if (S.ia && S.ia.shared) withIa[IA_SYNC_KEY] = S.ia.shared; const p = await Sync.plan(withIa, (SY.state && SY.state.base) || {}); pend = p.ups.length + p.dels.length; } catch (e) { pend = 1; }
+    }
+    if (att) {
+      const zip = await confirmDialog({ title: 'Guardar os comprovantes antes?', text: `Você tem <b>${att} comprovante(s)</b> (fotos e PDFs) guardados <b>só neste aparelho</b>: eles não vão para a nuvem. Ao sair, serão apagados daqui.<br><br>Quer exportar um ZIP com eles antes?`, ok: 'Exportar ZIP antes', cancel: 'Continuar sem exportar' });
+      if (zip) { await doExport('zip'); return; }
+    }
+    const ok = await confirmDialog({ title: 'Sair e apagar deste aparelho?', danger: true, ok: 'Sair e apagar daqui',
+      text: (pend ? `<div class="notice danger" style="margin:0 0 12px">${ic('alert')}<div class="ntext"><b>${pend} alteração(ões) ainda não foram para a nuvem</b> (sem internet?). Se sair agora, elas se perdem. Conecte e tente de novo.</div></div>` : '')
+        + 'Para ninguém ver seus dados neste celular, o app <b>apaga tudo daqui</b>: dados, cópias automáticas e chave da IA.<br><br>Na nuvem continua tudo, igual para quem divide o cofre com você. Ao entrar de novo, o app baixa os dados e confere com o servidor.' });
+    if (!ok) return;
+    await wipeLocal();
+    toast('Você saiu. Os dados foram apagados deste aparelho e continuam na nuvem.');
   }
 
   // ---------- PERGUNTE AO COFRE ----------
@@ -6754,7 +6841,7 @@ REGRAS
     'sy-check': () => syCheckPending(true).catch(e => showError('Sincronização', esc(e.message))),
     'sy-accept': async () => { try { await syAcceptInvite(); render(); } catch (e) { showError('Convite', esc(e.message)); render(); } },
     'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
-    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); S.syMode = 'login'; render(); toast('Você saiu da conta. Os dados continuam neste aparelho.'); },
+    'sy-logout': () => syLogoutWipe(),
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
     'cur-main': () => changeMainCurrency(),
     'fx-now': () => { toast('Buscando cotações…'); fxRefresh(true).then(() => { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(S.fxError ? 'Não foi possível atualizar: ' + S.fxError : 'Cotações atualizadas'); }); },
