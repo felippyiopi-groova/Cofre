@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-i+J7PgBw01O+HpgTRJmau3ehflGW7UnAf/KXyc5k0+M='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-foHdIspDG8QBDPucFZ6Qc1zw4Gf443WB6lw6RUNs3v0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -3745,12 +3745,12 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
   // ---------- CONTAS A PAGAR ----------
   function viewContas() {
     const ds = S.ds, today = todayStr(), sum = C.summarize(ds, today);
-    let h = `<h1 class="page-title">Contas a pagar</h1>
+    let h = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h1 class="page-title">Contas a pagar</h1><button class="btn" data-act="debt-new" style="width:auto;padding:10px 14px;margin:0;flex:none">${ic('plus')} Adicionar</button></div>
       <div class="stat-grid"><div class="stat"><div class="k">Pendente</div><div class="v">${M(sum.openPending, sum.mainCurrency)}</div><div class="s">em aberto</div></div><div class="stat"><div class="k">Planejado</div><div class="v">${M(sum.openPlanned, sum.mainCurrency)}</div><div class="s">ainda por vir</div></div></div>`;
     if (sum.openNoRate.length) h += `<div class="notice info">${ic('info')}<div class="ntext">Totais em ${esc(curName(sum.mainCurrency))}. Fora deles, por falta de cotação: ${sum.openNoRate.map(o => esc(obligationTitle(o)) + ' (' + esc(money(C.openAmountOf(o), C.currencyOf(o, ds))) + ')').join(', ')}. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Informar cotação</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>Vencimento passado:</b> ${sum.overdue.map(o => esc(obligationTitle(o))).join(', ')}. Se já pagou, toque na conta e registre o pagamento.</div></div>`;
     const months = Object.keys(sum.byMonth).sort((a, b) => a === 'sem-data' ? 1 : b === 'sem-data' ? -1 : a.localeCompare(b));
-    if (!months.length) h += `<div class="card empty"><div class="e-ico">✅</div>Nenhuma conta em aberto.</div>`;
+    if (!months.length) h += `<div class="card empty"><div class="e-ico">✅</div>Nenhuma conta em aberto.<button class="btn secondary" data-act="debt-new" style="margin-top:12px">${ic('plus')} Adicionar conta ou dívida</button></div>`;
     for (const m of months) {
       const g = sum.byMonth[m];
       const items = g.items.slice().sort((a, b) => String(a.due_date || '9').localeCompare(String(b.due_date || '9')));
@@ -3784,6 +3784,148 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     };
     sh.foot.querySelector('[data-edit]').onclick = () => { sh.close(); editObligation(o); };
   }
+  // ---------- adicionar conta a pagar / dívida: uma pergunta por vez ----------
+  // Cada etapa é uma pergunta curta com respostas rápidas para tocar. No fim, um resumo para confirmar.
+  const p2d = n => String(n).padStart(2, '0');
+  // Soma meses a uma data AAAA-MM-DD sem pular mês (31/01 + 1 mês = 28 ou 29/02).
+  function addMonthsYmd(ymd, k) {
+    const [y, m, d] = ymd.split('-').map(Number);
+    const t = new Date(y, m - 1 + k, 1), last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    return `${t.getFullYear()}-${p2d(t.getMonth() + 1)}-${p2d(Math.min(d, last))}`;
+  }
+  // Próxima data (a partir de hoje) com o dia do mês pedido.
+  function nextDay(day, today) {
+    const [y, m, d] = today.split('-').map(Number);
+    const base = `${y}-${p2d(m)}-${p2d(day)}`;
+    return d <= day ? addMonthsYmd(base, 0) : addMonthsYmd(base, 1);
+  }
+  const DEBT_KINDS = {
+    conta: { label: 'Conta do mês', sub: 'luz, água, aluguel, internet, escola…', names: ['Aluguel', 'Luz', 'Água', 'Internet', 'Condomínio', 'Celular', 'Escola', 'Plano de saúde'] },
+    parcelada: { label: 'Dívida parcelada', sub: 'empréstimo, financiamento, compra parcelada', names: ['Empréstimo', 'Financiamento do carro', 'Financiamento da casa', 'Compra parcelada', 'Acordo de dívida'] },
+    unica: { label: 'Dívida única', sub: 'boleto avulso, imposto, dinheiro que deve a alguém', names: ['Boleto', 'IPVA', 'IPTU', 'Empréstimo de família', 'Conserto'] }
+  };
+  // Monta os registros que serão criados a partir das respostas (função pura; usada no resumo e ao salvar).
+  function debtRecords(a, ds) {
+    const now = nowIso(), cur = a.currency || C.mainCurrency(ds), group = 'grp-' + Date.now().toString(36) + rand(2);
+    const slug = C.norm(a.name).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'conta';
+    const n = a.kind === 'parcelada' ? a.count : a.kind === 'conta' ? a.repeat : 1;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const due = a.due ? addMonthsYmd(a.due, i) : null;
+      const rec = {
+        id: `obl-${slug}-${due ? due.slice(0, 7) : 'sem-data'}-${rand(2)}`,
+        description: a.kind === 'parcelada' ? `${a.name} · parcela ${i + 1}/${n}` : a.name,
+        amount: C.round2(a.amount), currency: cur, due_date: due,
+        status: a.kind === 'conta' && i > 0 ? 'planejado' : a.status,
+        kind: a.kind, origin: 'usuario', created_at: now, updated_at: now
+      };
+      if (n > 1) Object.assign(rec, { group_id: group, installment_number: i + 1, installments_total: n });
+      rec.category = guessCategory(Object.assign({ name: a.name }, rec)) || undefined;
+      if (!rec.category) delete rec.category;
+      out.push(rec);
+    }
+    return out;
+  }
+  function openDebtWizard() {
+    const today = todayStr(), MC = C.mainCurrency(S.ds);
+    const a = { kind: null, name: '', amount: null, currency: MC, count: null, due: null, repeat: 1, status: null };
+    const steps = [
+      { id: 'kind' }, { id: 'name' }, { id: 'amount' }, { id: 'count', when: () => a.kind === 'parcelada' },
+      { id: 'due' }, { id: 'repeat', when: () => a.kind === 'conta' }, { id: 'status' }, { id: 'resumo' }
+    ];
+    let i = 0;
+    const sh = openSheet({ title: 'Adicionar conta a pagar', sticky: true, body: '', footHtml: '' });
+    const live = () => steps.filter(s => !s.when || s.when());
+    const chip = (v, label, sub, on) => `<button class="radio-card" data-v="${esc(v)}" style="width:100%;text-align:left;cursor:pointer;${on ? 'border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)' : ''}"><div><b>${label}</b>${sub ? `<div class="small muted">${sub}</div>` : ''}</div></button>`;
+    const quick = (items) => `<div class="chips ask-chips" style="flex-wrap:wrap;margin-top:10px">${items.map(([v, l]) => `<button class="chip" data-q="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+    function draw() {
+      const L = live(), step = L[i], total = L.length - 1; // o resumo não conta como pergunta
+      const bar = !a.kind ? '<div style="height:20px"></div>' : `<div style="display:flex;gap:4px;margin:0 0 16px">${L.slice(0, total).map((_, k) => `<div style="flex:1;height:4px;border-radius:2px;background:${k <= i ? 'var(--accent)' : 'var(--line)'}"></div>`).join('')}</div>`;
+      const ask = (q, help) => `${bar}<div class="tiny muted" style="font-weight:700;letter-spacing:.06em;text-transform:uppercase">${step.id === 'resumo' ? 'Confira' : a.kind ? `Pergunta ${i + 1} de ${total}` : 'Pergunta 1'}</div>
+        <h2 style="font-size:22px;letter-spacing:-0.01em;margin:4px 0 6px">${q}</h2>${help ? `<p class="small muted" style="margin:0 0 14px">${help}</p>` : '<div style="height:10px"></div>'}`;
+      let body = '', auto = false; // auto: tocar numa opção já avança
+      const kindLabel = a.kind ? DEBT_KINDS[a.kind].label.toLowerCase() : '';
+      switch (step.id) {
+        case 'kind':
+          body = ask('O que você quer adicionar?') + Object.entries(DEBT_KINDS).map(([k, d]) => chip(k, d.label, d.sub, a.kind === k)).join(''); auto = true; break;
+        case 'name':
+          body = ask('Qual o nome?', 'Como você chama essa conta. Toque numa sugestão ou escreva.') +
+            `<input class="input" id="dw-in" autocomplete="off" placeholder="ex.: ${esc(DEBT_KINDS[a.kind].names[0])}" value="${esc(a.name)}" style="font-size:18px">` + quick(DEBT_KINDS[a.kind].names.map(n => [n, n])); break;
+        case 'amount':
+          body = ask(a.kind === 'parcelada' ? 'Qual o valor de cada parcela?' : 'Qual o valor?', a.kind === 'conta' ? 'Se varia todo mês (como a luz), use uma média: dá para corrigir depois.' : '') +
+            `<input class="input big num" id="dw-in" inputmode="decimal" placeholder="0,00" value="${a.amount ? esc(String(a.amount).replace('.', ',')) : ''}">
+             <div style="display:flex;justify-content:center;margin-top:10px"><select class="input" id="dw-cur" style="width:auto;padding:8px 12px;font-size:14px">${currencyOptions(a.currency)}</select></div>`; break;
+        case 'count':
+          body = ask('Quantas parcelas faltam pagar?', 'Conte só as que ainda não foram pagas, incluindo a próxima.') +
+            `<input class="input big num" id="dw-in" inputmode="numeric" placeholder="ex.: 12" value="${a.count || ''}">` + quick([3, 6, 10, 12, 24, 36].map(n => [n, n + ' parcelas'])) +
+            `<p class="small" id="dw-tot" style="text-align:center;margin-top:12px"></p>`; break;
+        case 'due': {
+          const days = [5, 10, 15, 20, 25].map(d => nextDay(d, today));
+          body = ask(a.kind === 'parcelada' ? 'Quando vence a próxima parcela?' : 'Quando vence?') +
+            quick(days.map(d => [d, `dia ${Number(d.slice(8))} · ${fdate(d).slice(0, 5)}`]).concat(a.kind === 'parcelada' ? [] : [['', 'Ainda não sei']])) +
+            `<div class="field" style="margin-top:14px"><label for="dw-in">Ou escolha a data</label><input class="input" id="dw-in" type="date" value="${esc(a.due || '')}"></div>`; break;
+        }
+        case 'repeat':
+          if (!a.due) { a.repeat = 1; body = ask('Ela se repete todo mês?', 'Sem data de vencimento não dá para repetir nos próximos meses. Quando souber a data, edite a conta.') + chip(1, 'Só este mês', 'sem data definida', true); auto = true; break; }
+          body = ask('Ela se repete todo mês?', 'O app cria uma conta para cada mês. Os próximos meses entram como previsão, que você confirma quando a conta chegar.') +
+            [[1, 'Só este mês', ''], [3, 'Próximos 3 meses', ''], [6, 'Próximos 6 meses', ''], [12, 'Próximos 12 meses', 'bom para aluguel, escola, internet']].map(([v, l, s2]) => chip(v, l, s2, a.repeat === v)).join(''); auto = true; break;
+        case 'status':
+          body = ask(a.kind === 'parcelada' ? 'Essas parcelas já são certas?' : 'Esse valor já é certo?') +
+            chip('pendente', a.kind === 'parcelada' ? 'Sim, já estou pagando' : 'Sim, a conta já chegou', 'entra em "pendente": dinheiro que vai sair', a.status === 'pendente') +
+            chip('planejado', 'Ainda é uma previsão', 'entra em "planejado": dá para confirmar depois', a.status === 'planejado'); auto = true; break;
+        case 'resumo': {
+          const recs = debtRecords(a, S.ds), tot = C.round2(recs.reduce((s2, r) => s2 + r.amount, 0));
+          body = ask('Tudo certo?', 'Vai ser adicionado em "A pagar". Dá para editar ou excluir depois.') +
+            `<div class="card" style="margin:0 0 12px"><dl class="kv"><dt>Tipo</dt><dd>${esc(DEBT_KINDS[a.kind].label)}</dd><dt>Nome</dt><dd>${esc(a.name)}</dd>
+              <dt>${a.kind === 'parcelada' ? 'Parcela' : 'Valor'}</dt><dd><b>${M(a.amount, a.currency)}</b></dd>
+              ${a.kind === 'parcelada' ? `<dt>Parcelas</dt><dd>${a.count} · total ${M(tot, a.currency)}</dd>` : ''}
+              <dt>Vencimento</dt><dd>${a.due ? fdate(a.due) + (recs.length > 1 ? ` e depois todo dia ${Number(a.due.slice(8))}` : '') : 'sem data'}</dd>
+              <dt>Situação</dt><dd>${statusBadge(a.status)}</dd></dl></div>
+            <div class="card" style="margin:0"><div class="lbl">${recs.length === 1 ? 'Será criada 1 conta' : `Serão criadas ${recs.length} contas`}</div><div class="rows">${recs.slice(0, 4).map(r => `<div class="row-item"><div class="main"><div class="t">${esc(r.description)}</div><div class="s">${r.due_date ? 'vence ' + fdate(r.due_date) : 'sem data'} · ${esc(STATUS_LABEL[r.status] || r.status)}</div></div><div class="amt">${M(r.amount, r.currency)}</div></div>`).join('')}
+              ${recs.length > 4 ? `<div class="small muted" style="padding-top:8px">…e mais ${recs.length - 4}, até ${fdate(recs[recs.length - 1].due_date)}</div>` : ''}</div></div>`;
+          break;
+        }
+      }
+      sh.body.innerHTML = body + '<div id="dw-err" class="small" style="color:var(--danger);margin-top:8px"></div>';
+      sh.foot.innerHTML = `<div class="btn-row">${i > 0 ? '<button class="btn secondary" data-back>Voltar</button>' : ''}${auto && step.id !== 'resumo' ? '' : `<button class="btn" data-next>${step.id === 'resumo' ? ic('check') + ' Adicionar' : 'Continuar'}</button>`}</div>`;
+      const inp = sh.body.querySelector('#dw-in');
+      if (inp && inp.type !== 'date') setTimeout(() => inp.focus(), 60);
+      if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); next(); } });
+      if (step.id === 'count') { const upd = () => { const n = parseInt(inp.value, 10); sh.body.querySelector('#dw-tot').innerHTML = n > 0 ? `Total que falta: <b>${M(C.round2(n * a.amount), a.currency)}</b>` : ''; }; inp.addEventListener('input', upd); upd(); }
+      sh.body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { pick(b.dataset.v); next(); });
+      sh.body.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { if (step.id === 'due' && b.dataset.q === '') { a.due = null; i++; draw(); return; } inp.value = b.dataset.q; if (step.id === 'count') inp.dispatchEvent(new Event('input')); next(); });
+      const bk = sh.foot.querySelector('[data-back]'); if (bk) bk.onclick = () => { i--; draw(); };
+      const nx = sh.foot.querySelector('[data-next]'); if (nx) nx.onclick = () => next();
+    }
+    function pick(v) {
+      const id = live()[i].id;
+      if (id === 'kind') { if (a.kind !== v) { a.name = ''; a.count = null; a.repeat = 1; } a.kind = v; }
+      if (id === 'repeat') a.repeat = Number(v);
+      if (id === 'status') a.status = v;
+    }
+    const err = m => { sh.body.querySelector('#dw-err').textContent = m; };
+    async function next() {
+      const step = live()[i], inp = sh.body.querySelector('#dw-in');
+      if (step.id === 'kind' && !a.kind) return err('Escolha uma opção.');
+      if (step.id === 'name') { const v = inp.value.trim(); if (!v) return err('Escreva um nome ou toque numa sugestão.'); a.name = v.slice(0, 60); }
+      if (step.id === 'amount') { const v = C.num(inp.value.trim()); if (!(v > 0)) return err('Digite um valor maior que zero, ex.: 180,50.'); a.amount = C.round2(v); a.currency = sh.body.querySelector('#dw-cur').value; }
+      if (step.id === 'count') { const v = parseInt(inp.value, 10); if (!(v >= 1 && v <= 120)) return err('Digite de 1 a 120 parcelas.'); a.count = v; }
+      if (step.id === 'due') { const v = inp.value; if (!v && a.kind === 'parcelada') return err('Escolha a data da próxima parcela.'); a.due = v || null; }
+      if (step.id === 'repeat' && !a.repeat) return err('Escolha uma opção.');
+      if (step.id === 'status' && !a.status) return err('Escolha uma opção.');
+      if (step.id === 'resumo') {
+        const recs = debtRecords(a, S.ds);
+        const ds2 = C.clone(S.ds); if (!Array.isArray(ds2.obligations)) ds2.obligations = [];
+        ds2.obligations.push(...recs);
+        sh.close();
+        await commit(ds2, { audit: { type: 'obligation-create', description: `Conta a pagar adicionada: ${a.name}` + (recs.length > 1 ? ` (${recs.length} ${a.kind === 'parcelada' ? 'parcelas' : 'meses'})` : '') + ` · ${money(a.amount, a.currency)}` }, toast: recs.length > 1 ? `${recs.length} contas adicionadas` : 'Conta adicionada' });
+        return;
+      }
+      i++; draw();
+    }
+    draw();
+  }
+
   function editObligation(o) {
     const sts = ['pendente', 'planejado', 'pago', 'cancelado']; if (o.status && !sts.includes(o.status)) sts.unshift(o.status);
     const sh = openSheet({
@@ -5687,6 +5829,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'fx-unfix': el => unfixRate(el.dataset.cur),
     'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
+    'debt-new': () => openDebtWizard(),
     'sw-check': async () => {
       if (!swReg) { toast('Atualização automática indisponível neste navegador'); return; }
       if (!navigator.onLine) { toast('Sem internet: tente de novo quando conectar'); return; }
