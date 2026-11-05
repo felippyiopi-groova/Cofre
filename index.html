@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-foHdIspDG8QBDPucFZ6Qc1zw4Gf443WB6lw6RUNs3v0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-mVr14YGpSsEQ+oaI3dng9VBHdsDg5f62ASu6ms9T41g='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -268,7 +268,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
 /* ações rápidas estilo banco */
-.quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 14px; }
+.quick { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 0 0 14px; }
 .quick button { border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); padding: 4px 0; }
 .quick button span { width: 54px; height: 54px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow); display: grid; place-items: center; color: var(--accent); }
 .quick button span svg { width: 23px; height: 23px; }
@@ -3218,6 +3218,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     ${sum.missingRates.length ? `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Sem cotação para ${esc(sum.missingRates.join(', '))}</b>: fica fora do patrimônio total até o app conseguir baixar a cotação (precisa de internet) ou você fixar um valor. <button class="link" data-act="page" data-tab="mais" data-page="moedas">Ver cotações</button></div></div>` : ''}
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
+      <button data-act="save-money"><span>${ic('lock')}</span>Guardar</button>
       <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
       <button data-act="tab" data-tab="pergunte"><span>${ic('chat')}</span>Pergunte</button>
       <button data-act="page" data-tab="mais" data-page="docs"><span>${ic('file')}</span>Documentos</button>
@@ -3233,6 +3234,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       h += `<button class="row-item" data-act="account" data-id="${esc(b.id)}"><div class="ico">${b.currency !== MC ? esc(b.currency) : (b.protected ? '🔒' : '🏦')}</div>
         <div class="main"><div class="t">${esc(b.name)}</div><div class="s">${badge} <span class="${S.meta.hide_values ? 'money' : ''}">${esc(sub)}</span></div></div>
         <div class="amt">${b.balance === null ? '<span class="muted">—</span>' : M(b.balance, b.currency)}</div></button>`;
+      const accRaw = (ds.accounts || []).find(x => x.id === b.id) || {}, goal = C.num(accRaw.goal_amount);
+      if (goal > 0 && b.balance !== null) { const pct = Math.max(0, Math.min(100, Math.round(b.balance / goal * 100))); h += `<div style="padding:0 0 10px 52px"><div class="progress" style="margin:0 0 4px"><div style="width:${pct}%"></div></div><div class="tiny muted">${pct}% da meta de ${M(goal, b.currency)}${accRaw.goal_date ? ' · até ' + fdate(accRaw.goal_date) : ''} · faltam ${M(Math.max(0, C.round2(goal - b.balance)), b.currency)}</div></div>`; }
     }
     h += `</div></div>`;
     h += currenciesBlock(sum);
@@ -3780,7 +3783,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     if (pay) pay.onclick = () => {
       sh.close();
       const acc = (S.ds.accounts || []).find(a => a.id === 'nubank_debito') || (S.ds.accounts || [])[0] || {};
-      openTxForm(null, { type: 'despesa', amount: String(C.openAmountOf(o)).replace('.', ','), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), status: 'confirmado', account_id: acc.id || '' });
+      openTxWizard({ type: 'despesa', amount: C.openAmountOf(o), obligation_id: o.id, description: 'Pagamento ' + obligationTitle(o), category: guessCategory(o), catManual: true, account_id: '' });
     };
     sh.foot.querySelector('[data-edit]').onclick = () => { sh.close(); editObligation(o); };
   }
@@ -3826,104 +3829,286 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     }
     return out;
   }
+  // ================= PERGUNTAS POR ETAPA =================
+  // Mecanismo único dos assistentes: uma pergunta por tela, respostas rápidas para tocar,
+  // "Voltar" que mantém as respostas e um resumo para confirmar no fim.
+  // Etapa: { id, when(a), q(a), help(a), type: 'choice'|'input'|'summary',
+  //          options(a) → [{ v, label, sub, on }], input(a) → { kind, value, placeholder },
+  //          quick(a) → [[valor, rótulo]], extra(a) → html, apply(a, valor, sheet) → mensagem de erro | undefined,
+  //          body(a) → html (resumo), more → { label, act(a) } }
+  function runWizard(o) {
+    const a = o.a; let i = 0;
+    const sh = openSheet({ title: o.title, sticky: true, body: '', footHtml: '' });
+    const live = () => o.steps.filter(s => !s.when || s.when(a));
+    const chip = (v, label, sub, on) => `<button class="radio-card" data-v="${esc(v)}" style="width:100%;text-align:left;cursor:pointer;${on ? 'border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)' : ''}"><div><b>${label}</b>${sub ? `<div class="small muted">${sub}</div>` : ''}</div></button>`;
+    function draw() {
+      const L = live(); if (i >= L.length) i = L.length - 1;
+      const st = L[i], qs = L.filter(s => s.type !== 'summary'), n = qs.indexOf(st) + 1;
+      // O total só aparece depois das perguntas que mudam o caminho (decides), para não "pular" no meio.
+      const known = L.every((s, k) => !s.decides || k < i);
+      const head = st.type === 'summary' ? 'Confira' : known ? `Pergunta ${n} de ${qs.length}` : `Pergunta ${n}`;
+      const bar = !known ? '<div style="height:20px"></div>' : `<div style="display:flex;gap:4px;margin:0 0 16px">${qs.map((_, k) => `<div style="flex:1;height:4px;border-radius:2px;background:${k < n || st.type === 'summary' ? 'var(--accent)' : 'var(--line)'}"></div>`).join('')}</div>`;
+      const help = st.help ? st.help(a) : '';
+      let body = `${bar}<div class="tiny muted" style="font-weight:700;letter-spacing:.06em;text-transform:uppercase">${head}</div>
+        <h2 style="font-size:22px;letter-spacing:-0.01em;margin:4px 0 6px">${st.q(a)}</h2>${help ? `<p class="small muted" style="margin:0 0 14px">${help}</p>` : '<div style="height:10px"></div>'}`;
+      if (st.type === 'choice') body += st.options(a).map(x => chip(x.v, x.label, x.sub, x.on)).join('');
+      if (st.type === 'input') {
+        const inp = st.input(a);
+        const attrs = inp.kind === 'money' ? 'class="input big num" inputmode="decimal"' : inp.kind === 'int' ? 'class="input big num" inputmode="numeric"' : inp.kind === 'date' ? 'class="input" type="date"' : 'class="input" style="font-size:18px" autocapitalize="sentences"';
+        const field = `<input id="wz-in" ${attrs} autocomplete="off" placeholder="${esc(inp.placeholder || '')}" value="${esc(inp.value == null ? '' : inp.value)}">`;
+        const quick = st.quick ? st.quick(a) : [];
+        const qhtml = quick.length ? `<div class="chips ask-chips" style="flex-wrap:wrap;margin-top:10px">${quick.map(([v, l]) => `<button class="chip" data-q="${esc(v)}">${esc(l)}</button>`).join('')}</div>` : '';
+        body += inp.kind === 'date' ? qhtml + `<div class="field" style="margin-top:14px"><label for="wz-in">${esc(inp.label || 'Ou escolha a data')}</label>${field}</div>` : field + qhtml;
+      }
+      if (st.type === 'summary') body += st.body(a);
+      if (st.extra) body += st.extra(a);
+      sh.body.innerHTML = body + '<div id="wz-err" class="small" style="color:var(--danger);margin-top:8px"></div>';
+      const more = st.type === 'summary' && st.more ? `<button class="btn ghost" data-more style="margin-top:6px">${esc(st.more.label)}</button>` : '';
+      sh.foot.innerHTML = `<div class="btn-row">${i > 0 ? '<button class="btn secondary" data-back>Voltar</button>' : ''}${st.type === 'choice' ? '' : `<button class="btn" data-next>${st.type === 'summary' ? ic('check') + ' ' + esc(o.finishLabel || 'Salvar') : 'Continuar'}</button>`}</div>${more}`;
+      const inp = sh.body.querySelector('#wz-in');
+      if (inp && inp.type !== 'date') setTimeout(() => inp.focus(), 60);
+      if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); next(inp.value); } });
+      if (st.onDraw) st.onDraw(a, sh);
+      sh.body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => next(b.dataset.v));
+      sh.body.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { if (inp) inp.value = b.dataset.q; next(b.dataset.q); });
+      const bk = sh.foot.querySelector('[data-back]'); if (bk) bk.onclick = () => { i--; draw(); };
+      const nx = sh.foot.querySelector('[data-next]'); if (nx) nx.onclick = () => next(inp ? inp.value : undefined);
+      const mo = sh.foot.querySelector('[data-more]'); if (mo) mo.onclick = () => { sh.close(); st.more.act(a); };
+    }
+    let busy = false;
+    async function next(v) {
+      if (busy) return;
+      const st = live()[i];
+      const msg = st.apply ? st.apply(a, typeof v === 'string' ? v.trim() : v, sh) : undefined;
+      if (msg) { sh.body.querySelector('#wz-err').textContent = msg; return; }
+      if (st.type === 'summary') { busy = true; try { if ((await o.finish(a)) !== false) sh.close(); } finally { busy = false; } return; }
+      i++; draw();
+    }
+    draw();
+    return sh;
+  }
+  // Respostas rápidas comuns
+  const wzDays = today => [[today, 'Hoje'], [addDaysYmd(today, -1), 'Ontem'], [addDaysYmd(today, -2), 'Anteontem']];
+  function addDaysYmd(ymd, k) { const [y, m, d] = ymd.split('-').map(Number); const t = new Date(y, m - 1, d + k); return `${t.getFullYear()}-${p2d(t.getMonth() + 1)}-${p2d(t.getDate())}`; }
+  const wzMoney = (v, cur) => { const n = C.num(v); return n > 0 ? C.round2(n) : null; };
+  const isReserveAcc = acc => /protegid|espanha|reserva/.test(C.norm(acc && acc.status));
+  function accountOptions(filter, selected, opts) {
+    opts = opts || {};
+    const bal = C.computeBalances(S.ds);
+    const out = (S.ds.accounts || []).filter(x => x && x.id && filter(x)).map(acc => {
+      const b = bal.find(x => x.id === acc.id) || {};
+      return { v: acc.id, label: esc(acc.name || acc.id), sub: [acc.institution && acc.institution !== acc.name ? esc(acc.institution) : '', b.balance == null ? 'saldo desconhecido' : 'saldo ' + esc(money(b.balance, b.currency)), isReserveAcc(acc) ? 'reserva' : ''].filter(Boolean).join(' · '), on: selected === acc.id };
+    });
+    if (opts.cards) for (const cf of S.ds.credit_facilities || []) if (cf && cf.id) out.push({ v: cf.id, label: esc(cf.name || cf.id), sub: 'cartão de crédito · vai para a fatura', on: selected === cf.id });
+    return out;
+  }
+  const frequentDescriptions = (type, n) => {
+    const cnt = {};
+    for (const t of (S.ds.transactions || []).slice(-300)) if (t && C.txType(t) === type && t.description) cnt[t.description] = (cnt[t.description] || 0) + 1;
+    return Object.entries(cnt).sort((x, y) => y[1] - x[1]).slice(0, n).map(x => x[0]);
+  };
+  const uniq = arr => [...new Set(arr.filter(Boolean))];
+
+  // ---------- novo lançamento ----------
+  function openTxWizard(preset) {
+    const today = todayStr(), ds = S.ds;
+    const hasCards = (ds.credit_facilities || []).some(c => c && c.id);
+    const a = Object.assign({ type: null, amount: null, description: '', category: '', category_auto: null, catManual: false, account_id: '', to_account_id: '', amount_to: '', obligation_id: '', date: today, after_snapshot: null }, preset || {});
+    const openObl = () => (ds.obligations || []).filter(o => C.isObligationOpen(o)).sort((x, y) => String(x.due_date || '9').localeCompare(String(y.due_date || '9')));
+    const curOf = id => isCreditId(id) ? 'BRL' : currencyForAccount(id);
+    const draft = () => ({ type: a.type, amount: String(a.amount), date: a.date, status: a.date > today ? 'planejado' : 'confirmado', account_id: a.account_id, to_account_id: a.to_account_id,
+      amount_to: a.amount_to ? String(a.amount_to) : '', category: a.category, description: a.description, origin: 'usuario', notes: '', tags: '', obligation_id: a.obligation_id, after_snapshot: a.after_snapshot, file: null, category_auto: a.catManual ? null : a.category_auto });
+    const kinds = [['despesa', 'Gastei', 'compra, conta paga, saída de dinheiro'], ['receita', 'Recebi', 'salário, venda, reembolso'], ['transferencia', 'Transferi entre minhas contas', 'não é gasto nem receita'],
+      hasCards ? ['pagamento_fatura', 'Paguei a fatura do cartão', 'tira da conta e abate a fatura'] : null, ['guardar', 'Guardei dinheiro', 'mandar para uma reserva']].filter(Boolean);
+    runWizard({ title: preset && preset.obligation_id ? 'Registrar pagamento' : 'Novo lançamento', a, finishLabel: 'Salvar lançamento', steps: [
+      { id: 'type', decides: true, when: () => !(preset && preset.type), type: 'choice', q: () => 'O que aconteceu?', options: () => kinds.map(([v, l, s]) => ({ v, label: l, sub: s, on: a.type === v })),
+        apply: (a, v) => { if (v === 'guardar') { setTimeout(() => openSaveWizard(), 50); S.sheets.slice(-1)[0].close(); return 'abrindo'; } if (a.type !== v) { a.category = ''; a.description = ''; a.to_account_id = ''; } a.type = v; } },
+      { id: 'amount', type: 'input', q: a => ({ despesa: 'Quanto você gastou?', receita: 'Quanto você recebeu?', transferencia: 'Quanto você transferiu?', pagamento_fatura: 'Quanto você pagou da fatura?' })[a.type],
+        input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero, ex.: 25,90.'; a.amount = n; } },
+      { id: 'desc', when: a => (a.type === 'despesa' || a.type === 'receita') && !(preset && preset.obligation_id), type: 'input', q: a => a.type === 'despesa' ? 'Com o quê?' : 'De onde veio?', help: () => 'Escreva do seu jeito. A categoria é sugerida pelo que você escrever.',
+        input: a => ({ kind: 'text', value: a.description, placeholder: a.type === 'despesa' ? 'ex.: Mercado' : 'ex.: Salário' }),
+        quick: a => uniq(frequentDescriptions(a.type, 4).concat(a.type === 'despesa' ? ['Mercado', 'Uber', 'Farmácia', 'Restaurante', 'Combustível', 'Padaria'] : ['Salário', 'Pix recebido', 'Reembolso', 'Venda', 'Rendimento'])).slice(0, 8).map(x => [x, x]),
+        apply: (a, v) => { if (!v) return 'Escreva uma descrição curta ou toque numa sugestão.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : null; } } },
+      { id: 'cat', when: a => a.type === 'despesa' && !(preset && preset.obligation_id), type: 'choice', q: () => 'Qual categoria?', help: a => a.category_auto ? `Sugeri pela palavra “${esc(a.category_auto)}”. Toque para confirmar ou trocar.` : 'Escolha a que mais combina.',
+        options: a => C.CATEGORIES.map(c => ({ v: c, label: esc(c) + (a.category === c && a.category_auto ? ' <span class="badge">sugerida</span>' : ''), on: a.category === c })).concat([{ v: '', label: 'Sem categoria', on: false }]),
+        apply: (a, v) => { a.catManual = v !== a.category || a.catManual; a.category = v; if (a.catManual) a.category_auto = null; } },
+      { id: 'acc', type: 'choice', q: a => ({ despesa: 'De onde saiu o dinheiro?', receita: 'Em qual conta entrou?', transferencia: 'De qual conta saiu?', pagamento_fatura: 'De qual conta saiu o pagamento?' })[a.type],
+        options: a => { const o = accountOptions(() => true, a.account_id, { cards: a.type === 'despesa' }); return o.length ? o : [{ v: '__nova', label: 'Cadastrar uma conta', sub: 'você ainda não tem contas' }]; },
+        apply: (a, v) => { if (v === '__nova') { S.sheets.slice(-1)[0].close(); setTimeout(() => openAccountWizard(), 50); return 'abrindo'; } a.account_id = v; a.after_snapshot = null; } },
+      { id: 'to', when: a => a.type === 'transferencia' || a.type === 'pagamento_fatura', type: 'choice', q: a => a.type === 'transferencia' ? 'Para qual conta foi?' : 'Qual cartão você pagou?',
+        options: a => a.type === 'transferencia' ? accountOptions(x => x.id !== a.account_id, a.to_account_id) : (ds.credit_facilities || []).map(c => ({ v: c.id, label: esc(c.name || c.id), on: a.to_account_id === c.id })),
+        apply: (a, v) => { a.to_account_id = v; a.amount_to = ''; } },
+      { id: 'amountTo', when: a => a.type === 'transferencia' && a.to_account_id && curOf(a.to_account_id) !== curOf(a.account_id), type: 'input', q: a => `Quanto chegou em ${curOf(a.to_account_id)}?`,
+        help: a => `A conta de destino é em outra moeda. ${C.rateOf(ds, curOf(a.account_id)) && C.rateOf(ds, curOf(a.to_account_id)) ? 'Preenchi pela cotação; ajuste para o valor que realmente chegou.' : ''}`,
+        input: a => { const r1 = C.rateOf(ds, curOf(a.account_id)), r2 = C.rateOf(ds, curOf(a.to_account_id)); const guess = a.amount_to || (r1 && r2 ? C.round2(a.amount * r1 / r2) : ''); return { kind: 'money', value: guess ? String(guess).replace('.', ',') : '', placeholder: '0,00' }; },
+        apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite o valor que chegou na conta de destino.'; a.amount_to = n; } },
+      { id: 'obl', when: a => a.type === 'despesa' && !(preset && preset.obligation_id) && openObl().length > 0, type: 'choice', q: () => 'É o pagamento de alguma conta a pagar?', help: () => 'Se for, ela sai da lista de "A pagar".',
+        options: a => [{ v: '', label: 'Não', on: !a.obligation_id }].concat(openObl().slice(0, 8).map(o => ({ v: o.id, label: esc(obligationTitle(o)), sub: [o.due_date ? 'vence ' + fdate(o.due_date) : 'sem data', money(C.openAmountOf(o), C.currencyOf(o, ds))].join(' · '), on: a.obligation_id === o.id }))),
+        apply: (a, v) => { a.obligation_id = v; } },
+      { id: 'date', type: 'input', q: () => 'Quando foi?', help: () => 'Data no futuro fica como "planejado" e não mexe no saldo até acontecer.',
+        input: a => ({ kind: 'date', value: a.date }), quick: () => wzDays(today), apply: (a, v) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'Escolha a data.'; a.date = v; a.after_snapshot = null; } },
+      { id: 'snap', when: a => needsSnapshotAnswer(draft()), type: 'choice', q: () => 'Esse valor já estava no saldo que você informou?',
+        help: a => `O saldo de ${esc(accountName(a.account_id))} foi informado com data de ${fdate(cutoffFor(a.account_id))}, o mesmo dia deste lançamento.`,
+        options: a => [{ v: 'no', label: 'Não, aconteceu depois', sub: 'mexe no saldo agora', on: a.after_snapshot === true }, { v: 'yes', label: 'Sim, já estava no saldo', sub: 'fica registrado sem mexer no saldo', on: a.after_snapshot === false }],
+        apply: (a, v) => { a.after_snapshot = v === 'no'; } },
+      { id: 'resumo', type: 'summary', q: () => 'Tudo certo?', body: a => {
+          const d = draft(), cur = curOf(a.account_id);
+          return `<div class="card" style="margin:0"><dl class="kv"><dt>Tipo</dt><dd>${esc(TYPE_LABEL[a.type])}</dd><dt>Valor</dt><dd><b>${M(a.amount, cur)}</b>${a.amount_to ? ' → ' + M(a.amount_to, curOf(a.to_account_id)) : ''}</dd>
+            ${a.description ? `<dt>Descrição</dt><dd>${esc(a.description)}</dd>` : ''}${a.type === 'despesa' ? `<dt>Categoria</dt><dd>${esc(a.category || 'sem categoria')}</dd>` : ''}
+            <dt>${a.type === 'receita' ? 'Entrou em' : 'Saiu de'}</dt><dd>${esc(accountName(a.account_id))}</dd>${a.to_account_id ? `<dt>Para</dt><dd>${esc(accountName(a.to_account_id))}</dd>` : ''}
+            ${a.obligation_id ? `<dt>Paga a conta</dt><dd>${esc(obligationTitle((ds.obligations || []).find(o => o.id === a.obligation_id) || {}))}</dd>` : ''}
+            <dt>Data</dt><dd>${fdate(a.date)}</dd><dt>Situação</dt><dd>${statusBadge(d.status)}</dd></dl></div>`;
+        }, more: { label: 'Mais opções (comprovante, observação)', act: a => openTxForm(null, Object.assign(draft(), { amount: String(a.amount).replace('.', ','), amount_to: a.amount_to ? String(a.amount_to).replace('.', ',') : '', catManual: a.catManual })) } }
+    ], finish: async a => {
+      const d = draft();
+      const problems = validateDraft(d); if (problems.length) { showError('Falta algo', problems.join('<br>')); return false; }
+      const dup = findDuplicate(d, null);
+      if (dup && !(await confirmDialog({ title: 'Possível duplicidade', text: `Já existe um lançamento igual: <b>${esc(dup.description || '')}</b>, ${esc(money(C.num(dup.amount)))} em ${fdate(dup.date)} na mesma conta.<br><br>É outro de verdade?`, ok: 'Sim, salvar' }))) return false;
+      S.sheets.slice(-1)[0].close();
+      await persistTx(null, d);
+    } });
+  }
+
+  // ---------- guardar dinheiro ----------
+  const RESERVE_NAMES = ['Reserva de emergência', 'Viagem', 'Carro', 'Casa própria', 'Estudos', 'Aposentadoria', 'Presentes'];
+  function openSaveWizard() {
+    const today = todayStr(), ds = S.ds;
+    const reserves = () => (ds.accounts || []).filter(x => x && x.id && isReserveAcc(x));
+    const a = { amount: null, from: '', to: '', newName: '', newInst: '', goal: null, goalAmount: null, goalDate: null, date: today, amount_to: null };
+    const curOf = id => currencyForAccount(id);
+    const destCur = () => a.to === '__nova' ? curOf(a.from) : curOf(a.to);
+    const destAcc = () => a.to === '__nova' ? { name: a.newName, goal_amount: a.goalAmount, goal_date: a.goalDate } : (ds.accounts || []).find(x => x.id === a.to) || {};
+    const destBalance = () => { if (a.to === '__nova') return 0; const b = C.computeBalances(ds).find(x => x.id === a.to); return b && b.balance != null ? b.balance : 0; };
+    const goalLine = (after) => { const g = C.num(destAcc().goal_amount); if (!(g > 0)) return ''; const pct = Math.min(100, Math.round(after / g * 100)); return `<div class="progress" style="margin-top:10px"><div style="width:${pct}%"></div></div><div class="small">${M(C.round2(after), destCur())} de ${M(g, destCur())} · <b>${pct}%</b> da meta${destAcc().goal_date ? ' · até ' + fdate(destAcc().goal_date) : ''}</div>`; };
+    const inMonths = k => addMonthsYmd(today, k);
+    runWizard({ title: 'Guardar dinheiro', a, finishLabel: 'Guardar', steps: [
+      { id: 'amount', type: 'input', q: () => 'Quanto você quer guardar?', input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }),
+        quick: () => [50, 100, 200, 500].map(n => [String(n), money(n, C.mainCurrency(ds)).replace(/,00$/, '')]), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero.'; a.amount = n; } },
+      { id: 'from', type: 'choice', q: () => 'De qual conta sai o dinheiro?', options: a => { const o = accountOptions(x => !isReserveAcc(x), a.from); return o.length ? o : accountOptions(() => true, a.from); },
+        apply: (a, v) => { a.from = v; } },
+      { id: 'to', decides: true, type: 'choice', q: () => 'Para onde vai?', help: () => 'Reserva é dinheiro guardado: entra no patrimônio, mas não no "disponível em conta".',
+        options: a => reserves().filter(x => x.id !== a.from).map(x => { const b = C.computeBalances(ds).find(y => y.id === x.id) || {}; const g = C.num(x.goal_amount); return { v: x.id, label: esc(x.name), sub: [b.balance == null ? '' : 'tem ' + esc(money(b.balance, b.currency)), g > 0 ? 'meta ' + esc(money(g, b.currency)) : ''].filter(Boolean).join(' · '), on: a.to === x.id }; })
+          .concat([{ v: '__nova', label: '+ Criar uma reserva nova', sub: 'emergência, viagem, carro…', on: a.to === '__nova' }]),
+        apply: (a, v) => { a.to = v; a.amount_to = null; } },
+      { id: 'newName', when: a => a.to === '__nova', type: 'input', q: () => 'Qual o nome da reserva?', input: a => ({ kind: 'text', value: a.newName, placeholder: 'ex.: Reserva de emergência' }),
+        quick: () => RESERVE_NAMES.map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva um nome ou toque numa sugestão.'; a.newName = v.slice(0, 50); } },
+      { id: 'newInst', when: a => a.to === '__nova', type: 'input', q: () => 'Onde esse dinheiro fica guardado?', help: () => 'O banco ou a corretora. Pode ser o mesmo da conta de origem (ex.: caixinha do Nubank).',
+        input: a => ({ kind: 'text', value: a.newInst || ((ds.accounts || []).find(x => x.id === a.from) || {}).institution || '', placeholder: 'ex.: Nubank' }),
+        quick: a => uniq([((ds.accounts || []).find(x => x.id === a.from) || {}).institution].concat(BANKS.slice(0, 6))).map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva onde fica (banco, corretora…).'; a.newInst = v.slice(0, 40); } },
+      { id: 'goal', decides: true, when: a => a.to === '__nova', type: 'choice', q: () => 'Quer definir uma meta?', help: () => 'Com meta, a tela inicial mostra quanto falta.',
+        options: a => [{ v: 'sim', label: 'Sim, quero juntar um valor', on: a.goal === true }, { v: 'nao', label: 'Agora não', sub: 'dá para definir depois', on: a.goal === false }], apply: (a, v) => { a.goal = v === 'sim'; if (!a.goal) { a.goalAmount = null; a.goalDate = null; } } },
+      { id: 'goalAmount', when: a => a.to === '__nova' && a.goal, type: 'input', q: () => 'Quanto você quer juntar?', input: a => ({ kind: 'money', value: a.goalAmount ? String(a.goalAmount).replace('.', ',') : '', placeholder: '0,00' }),
+        quick: a => [1000, 5000, 10000, 20000].map(n => [String(n), money(n, curOf(a.from)).replace(/,00$/, '')]), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite o valor da meta.'; a.goalAmount = n; } },
+      { id: 'goalDate', when: a => a.to === '__nova' && a.goal, type: 'input', q: () => 'Até quando?', input: a => ({ kind: 'date', value: a.goalDate || '', label: 'Ou escolha a data' }),
+        quick: () => [[inMonths(6), 'Em 6 meses'], [inMonths(12), 'Em 1 ano'], [inMonths(24), 'Em 2 anos'], ['', 'Sem prazo']], apply: (a, v) => { a.goalDate = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null; } },
+      { id: 'amountTo', when: a => a.to && a.to !== '__nova' && destCur() !== curOf(a.from), type: 'input', q: a => `Quanto chegou em ${destCur()}?`, help: () => 'A reserva é em outra moeda. Preenchi pela cotação; ajuste para o valor que realmente chegou.',
+        input: a => { const r1 = C.rateOf(ds, curOf(a.from)), r2 = C.rateOf(ds, destCur()); const g = a.amount_to || (r1 && r2 ? C.round2(a.amount * r1 / r2) : ''); return { kind: 'money', value: g ? String(g).replace('.', ',') : '' }; },
+        apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite o valor que chegou.'; a.amount_to = n; } },
+      { id: 'date', type: 'input', q: () => 'Quando você guardou?', input: a => ({ kind: 'date', value: a.date }), quick: () => wzDays(today), apply: (a, v) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'Escolha a data.'; a.date = v; } },
+      { id: 'resumo', type: 'summary', q: () => 'Tudo certo?', body: a => {
+          const add = a.amount_to || a.amount, after = destBalance() + add;
+          return `<div class="card" style="margin:0"><div style="font-size:15px">Guardar <b>${M(a.amount, curOf(a.from))}</b>${a.amount_to ? ` (chega ${M(a.amount_to, destCur())})` : ''}</div>
+            <div class="small muted" style="margin-top:4px">de <b>${esc(accountName(a.from))}</b> para <b>${esc(a.to === '__nova' ? a.newName + ' (nova reserva em ' + a.newInst + ')' : accountName(a.to))}</b> · ${fdate(a.date)}</div>
+            ${goalLine(after)}</div>`;
+        } }
+    ], finish: async a => {
+      const ds2 = C.clone(S.ds), now = nowIso();
+      let toId = a.to;
+      if (a.to === '__nova') {
+        const sl = C.norm(a.newName).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'reserva';
+        toId = `acc-${sl}-${rand(2)}`;
+        // saldo zero no dia anterior: a transferência de hoje entra no saldo da reserva
+        const acc = { id: toId, name: a.newName, institution: a.newInst, type: 'banco', currency: curOf(a.from), snapshot_balance: 0, snapshot_date: addDaysYmd(a.date, -1), status: 'reserva', origin: 'usuario', created_at: now, updated_at: now };
+        if (a.goalAmount) acc.goal_amount = a.goalAmount; if (a.goalDate) acc.goal_date = a.goalDate;
+        ds2.accounts.push(acc);
+        await commit(ds2, { audit: { type: 'account-create', description: `Reserva criada: ${a.newName}` + (a.goalAmount ? ` · meta ${money(a.goalAmount, acc.currency)}` : '') } });
+      }
+      const d = { type: 'transferencia', amount: String(a.amount), date: a.date, status: a.date > today ? 'planejado' : 'confirmado', account_id: a.from, to_account_id: toId, amount_to: a.amount_to ? String(a.amount_to) : '',
+        category: '', description: 'Guardado: ' + (a.to === '__nova' ? a.newName : accountName(toId)), origin: 'usuario', notes: '', tags: '', obligation_id: '', after_snapshot: null, file: null };
+      if (needsSnapshotAnswer(d)) d.after_snapshot = true;
+      const problems = validateDraft(d); if (problems.length) { showError('Falta algo', problems.join('<br>')); return false; }
+      S.sheets.slice(-1)[0].close();
+      await persistTx(null, d, { toast: false });
+      toast(`${money(a.amount, curOf(a.from))} guardado em ${a.to === '__nova' ? a.newName : accountName(toId)}`);
+    } });
+  }
+
+  // ---------- nova conta de banco ----------
+  function openAccountWizard() {
+    const today = todayStr(), ds = S.ds, MC = C.mainCurrency(ds);
+    const a = { bank: '', name: '', currency: MC, balance: null, date: today, reserve: null };
+    runWizard({ title: 'Nova conta', a, finishLabel: 'Cadastrar conta', steps: [
+      { id: 'bank', type: 'input', q: () => 'Qual o banco?', help: () => 'Ou corretora, carteira digital, dinheiro em casa…', input: a => ({ kind: 'text', value: a.bank, placeholder: 'ex.: Nubank' }),
+        quick: () => BANKS.slice(0, 12).map(x => [x, x]).concat([['Dinheiro em espécie', 'Dinheiro em espécie']]), apply: (a, v) => { if (!v) return 'Escreva o nome ou toque numa sugestão.'; if (a.bank !== v) a.name = ''; a.bank = v.slice(0, 40); } },
+      { id: 'name', type: 'input', q: () => 'Como quer chamar essa conta?', help: a => `Útil se você tem mais de uma no ${esc(a.bank)}. Toque em “${esc(a.bank)}” para usar só o nome do banco.`,
+        input: a => ({ kind: 'text', value: a.name, placeholder: 'ex.: Conta salário' }), quick: a => [[a.bank, a.bank], [a.bank + ' · conta corrente', 'Conta corrente'], [a.bank + ' · poupança', 'Poupança'], [a.bank + ' · caixinha', 'Caixinha']],
+        apply: (a, v) => { a.name = (v || a.bank).slice(0, 50); } },
+      { id: 'cur', type: 'choice', q: () => 'Em qual moeda?', options: a => uniq([MC, 'BRL', 'USD', 'EUR']).map(c => ({ v: c, label: `${c} · ${esc(curName(c))}`, on: a.currency === c })).concat([{ v: '__outra', label: 'Outra moeda…', on: false }]),
+        apply: (a, v, sh) => { if (v === '__outra') { const s = sh.body.querySelector('#wz-cur'); if (!s) return 'Escolha a moeda na lista abaixo.'; a.currency = s.value; return; } a.currency = v; },
+        extra: () => `<details class="fold" style="margin-top:6px"><summary class="small">Lista de todas as moedas</summary><div style="display:flex;gap:8px;margin-top:8px"><select class="input" id="wz-cur">${currencyOptions(a.currency)}</select><button class="btn" data-v="__outra" style="width:auto;margin:0">Usar</button></div></details>` },
+      { id: 'balance', type: 'input', q: a => `Quanto tem nela hoje?`, help: a => `Em ${esc(a.currency)}, como aparece no app do banco. Pode ser 0.`, input: a => ({ kind: 'money', value: a.balance != null ? String(a.balance).replace('.', ',') : '', placeholder: '0,00' }),
+        apply: (a, v) => { const n = C.num(v === '' ? 'x' : v); if (isNaN(n)) return 'Digite o saldo (pode ser 0 ou negativo).'; a.balance = C.round2(n); } },
+      { id: 'reserve', type: 'choice', q: () => 'Para que serve essa conta?', options: a => [{ v: 'dia', label: 'Dia a dia', sub: 'conta que você usa para pagar e receber', on: a.reserve === false }, { v: 'reserva', label: 'Reserva', sub: 'dinheiro guardado: entra no patrimônio, não no disponível', on: a.reserve === true }],
+        apply: (a, v) => { a.reserve = v === 'reserva'; } },
+      { id: 'resumo', type: 'summary', q: () => 'Tudo certo?', body: a => `<div class="card" style="margin:0"><dl class="kv"><dt>Banco</dt><dd>${esc(a.bank)}</dd><dt>Nome</dt><dd>${esc(a.name)}</dd><dt>Moeda</dt><dd>${esc(a.currency)}</dd><dt>Saldo</dt><dd><b>${M(a.balance, a.currency)}</b> em ${fdate(a.date)}</dd><dt>Tipo</dt><dd>${a.reserve ? 'Reserva' : 'Dia a dia'}</dd></dl></div>
+          <p class="help">Lançamentos a partir de amanhã mudam este saldo automaticamente.</p>` }
+    ], finish: async a => {
+      const ds2 = C.clone(S.ds), now = nowIso(); if (!Array.isArray(ds2.accounts)) ds2.accounts = [];
+      const sl = C.norm(a.bank).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'conta';
+      const acc = { id: `acc-${sl}-${rand(2)}`, name: a.name || a.bank, institution: a.bank, type: 'banco', currency: a.currency, snapshot_balance: a.balance, snapshot_date: a.date, status: a.reserve ? 'reserva' : 'operacional', origin: 'usuario', created_at: now, updated_at: now };
+      ds2.accounts.push(acc); if (!ds2.snapshot_date) ds2.snapshot_date = a.date;
+      S.sheets.slice(-1)[0].close();
+      await commit(ds2, { audit: { type: 'account-create', description: `Conta cadastrada: ${acc.name} (${acc.currency}) · saldo ${money(acc.snapshot_balance, acc.currency)} em ${fdate(acc.snapshot_date)}`, extra: { record_id: acc.id } }, toast: 'Conta cadastrada' });
+      if (acc.currency !== C.mainCurrency(S.ds) && C.rateOf(S.ds, acc.currency) === null) fxRefresh(true);
+    } });
+  }
+
+  // ---------- adicionar conta a pagar ou dívida ----------
   function openDebtWizard() {
     const today = todayStr(), MC = C.mainCurrency(S.ds);
     const a = { kind: null, name: '', amount: null, currency: MC, count: null, due: null, repeat: 1, status: null };
-    const steps = [
-      { id: 'kind' }, { id: 'name' }, { id: 'amount' }, { id: 'count', when: () => a.kind === 'parcelada' },
-      { id: 'due' }, { id: 'repeat', when: () => a.kind === 'conta' }, { id: 'status' }, { id: 'resumo' }
-    ];
-    let i = 0;
-    const sh = openSheet({ title: 'Adicionar conta a pagar', sticky: true, body: '', footHtml: '' });
-    const live = () => steps.filter(s => !s.when || s.when());
-    const chip = (v, label, sub, on) => `<button class="radio-card" data-v="${esc(v)}" style="width:100%;text-align:left;cursor:pointer;${on ? 'border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)' : ''}"><div><b>${label}</b>${sub ? `<div class="small muted">${sub}</div>` : ''}</div></button>`;
-    const quick = (items) => `<div class="chips ask-chips" style="flex-wrap:wrap;margin-top:10px">${items.map(([v, l]) => `<button class="chip" data-q="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
-    function draw() {
-      const L = live(), step = L[i], total = L.length - 1; // o resumo não conta como pergunta
-      const bar = !a.kind ? '<div style="height:20px"></div>' : `<div style="display:flex;gap:4px;margin:0 0 16px">${L.slice(0, total).map((_, k) => `<div style="flex:1;height:4px;border-radius:2px;background:${k <= i ? 'var(--accent)' : 'var(--line)'}"></div>`).join('')}</div>`;
-      const ask = (q, help) => `${bar}<div class="tiny muted" style="font-weight:700;letter-spacing:.06em;text-transform:uppercase">${step.id === 'resumo' ? 'Confira' : a.kind ? `Pergunta ${i + 1} de ${total}` : 'Pergunta 1'}</div>
-        <h2 style="font-size:22px;letter-spacing:-0.01em;margin:4px 0 6px">${q}</h2>${help ? `<p class="small muted" style="margin:0 0 14px">${help}</p>` : '<div style="height:10px"></div>'}`;
-      let body = '', auto = false; // auto: tocar numa opção já avança
-      const kindLabel = a.kind ? DEBT_KINDS[a.kind].label.toLowerCase() : '';
-      switch (step.id) {
-        case 'kind':
-          body = ask('O que você quer adicionar?') + Object.entries(DEBT_KINDS).map(([k, d]) => chip(k, d.label, d.sub, a.kind === k)).join(''); auto = true; break;
-        case 'name':
-          body = ask('Qual o nome?', 'Como você chama essa conta. Toque numa sugestão ou escreva.') +
-            `<input class="input" id="dw-in" autocomplete="off" placeholder="ex.: ${esc(DEBT_KINDS[a.kind].names[0])}" value="${esc(a.name)}" style="font-size:18px">` + quick(DEBT_KINDS[a.kind].names.map(n => [n, n])); break;
-        case 'amount':
-          body = ask(a.kind === 'parcelada' ? 'Qual o valor de cada parcela?' : 'Qual o valor?', a.kind === 'conta' ? 'Se varia todo mês (como a luz), use uma média: dá para corrigir depois.' : '') +
-            `<input class="input big num" id="dw-in" inputmode="decimal" placeholder="0,00" value="${a.amount ? esc(String(a.amount).replace('.', ',')) : ''}">
-             <div style="display:flex;justify-content:center;margin-top:10px"><select class="input" id="dw-cur" style="width:auto;padding:8px 12px;font-size:14px">${currencyOptions(a.currency)}</select></div>`; break;
-        case 'count':
-          body = ask('Quantas parcelas faltam pagar?', 'Conte só as que ainda não foram pagas, incluindo a próxima.') +
-            `<input class="input big num" id="dw-in" inputmode="numeric" placeholder="ex.: 12" value="${a.count || ''}">` + quick([3, 6, 10, 12, 24, 36].map(n => [n, n + ' parcelas'])) +
-            `<p class="small" id="dw-tot" style="text-align:center;margin-top:12px"></p>`; break;
-        case 'due': {
-          const days = [5, 10, 15, 20, 25].map(d => nextDay(d, today));
-          body = ask(a.kind === 'parcelada' ? 'Quando vence a próxima parcela?' : 'Quando vence?') +
-            quick(days.map(d => [d, `dia ${Number(d.slice(8))} · ${fdate(d).slice(0, 5)}`]).concat(a.kind === 'parcelada' ? [] : [['', 'Ainda não sei']])) +
-            `<div class="field" style="margin-top:14px"><label for="dw-in">Ou escolha a data</label><input class="input" id="dw-in" type="date" value="${esc(a.due || '')}"></div>`; break;
-        }
-        case 'repeat':
-          if (!a.due) { a.repeat = 1; body = ask('Ela se repete todo mês?', 'Sem data de vencimento não dá para repetir nos próximos meses. Quando souber a data, edite a conta.') + chip(1, 'Só este mês', 'sem data definida', true); auto = true; break; }
-          body = ask('Ela se repete todo mês?', 'O app cria uma conta para cada mês. Os próximos meses entram como previsão, que você confirma quando a conta chegar.') +
-            [[1, 'Só este mês', ''], [3, 'Próximos 3 meses', ''], [6, 'Próximos 6 meses', ''], [12, 'Próximos 12 meses', 'bom para aluguel, escola, internet']].map(([v, l, s2]) => chip(v, l, s2, a.repeat === v)).join(''); auto = true; break;
-        case 'status':
-          body = ask(a.kind === 'parcelada' ? 'Essas parcelas já são certas?' : 'Esse valor já é certo?') +
-            chip('pendente', a.kind === 'parcelada' ? 'Sim, já estou pagando' : 'Sim, a conta já chegou', 'entra em "pendente": dinheiro que vai sair', a.status === 'pendente') +
-            chip('planejado', 'Ainda é uma previsão', 'entra em "planejado": dá para confirmar depois', a.status === 'planejado'); auto = true; break;
-        case 'resumo': {
+    const days = () => [5, 10, 15, 20, 25].map(d => nextDay(d, today));
+    runWizard({ title: 'Adicionar conta a pagar', a, finishLabel: 'Adicionar', steps: [
+      { id: 'kind', decides: true, type: 'choice', q: () => 'O que você quer adicionar?', options: a => Object.entries(DEBT_KINDS).map(([k, d]) => ({ v: k, label: d.label, sub: d.sub, on: a.kind === k })),
+        apply: (a, v) => { if (a.kind !== v) { a.name = ''; a.count = null; a.repeat = 1; } a.kind = v; } },
+      { id: 'name', type: 'input', q: () => 'Qual o nome?', help: () => 'Como você chama essa conta. Toque numa sugestão ou escreva.', input: a => ({ kind: 'text', value: a.name, placeholder: 'ex.: ' + DEBT_KINDS[a.kind].names[0] }),
+        quick: a => DEBT_KINDS[a.kind].names.map(n => [n, n]), apply: (a, v) => { if (!v) return 'Escreva um nome ou toque numa sugestão.'; a.name = v.slice(0, 60); } },
+      { id: 'amount', type: 'input', q: a => a.kind === 'parcelada' ? 'Qual o valor de cada parcela?' : 'Qual o valor?', help: a => a.kind === 'conta' ? 'Se varia todo mês (como a luz), use uma média: dá para corrigir depois.' : '',
+        input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }),
+        extra: a => `<div style="display:flex;justify-content:center;margin-top:10px"><select class="input" id="dw-cur" style="width:auto;padding:8px 12px;font-size:14px">${currencyOptions(a.currency)}</select></div>`,
+        apply: (a, v, sh) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero, ex.: 180,50.'; a.amount = n; a.currency = sh.body.querySelector('#dw-cur').value; } },
+      { id: 'count', when: a => a.kind === 'parcelada', type: 'input', q: () => 'Quantas parcelas faltam pagar?', help: () => 'Conte só as que ainda não foram pagas, incluindo a próxima.',
+        input: a => ({ kind: 'int', value: a.count || '', placeholder: 'ex.: 12' }), quick: () => [3, 6, 10, 12, 24, 36].map(n => [String(n), n + ' parcelas']),
+        extra: () => '<p class="small" id="dw-tot" style="text-align:center;margin-top:12px"></p>',
+        onDraw: (a, sh) => { const inp = sh.body.querySelector('#wz-in'); const upd = () => { const n = parseInt(inp.value, 10); sh.body.querySelector('#dw-tot').innerHTML = n > 0 ? `Total que falta: <b>${M(C.round2(n * a.amount), a.currency)}</b>` : ''; }; inp.addEventListener('input', upd); upd(); },
+        apply: (a, v) => { const n = parseInt(v, 10); if (!(n >= 1 && n <= 120)) return 'Digite de 1 a 120 parcelas.'; a.count = n; } },
+      { id: 'due', type: 'input', q: a => a.kind === 'parcelada' ? 'Quando vence a próxima parcela?' : 'Quando vence?', input: a => ({ kind: 'date', value: a.due || '' }),
+        quick: a => days().map(d => [d, `dia ${Number(d.slice(8))} · ${fdate(d).slice(0, 5)}`]).concat(a.kind === 'parcelada' ? [] : [['', 'Ainda não sei']]),
+        apply: (a, v) => { if (!v && a.kind === 'parcelada') return 'Escolha a data da próxima parcela.'; if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'Escolha uma data.'; a.due = v || null; if (!a.due) a.repeat = 1; } },
+      { id: 'repeat', when: a => a.kind === 'conta', type: 'choice', q: () => 'Ela se repete todo mês?',
+        help: a => a.due ? 'O app cria uma conta para cada mês. Os próximos meses entram como previsão, que você confirma quando a conta chegar.' : 'Sem data de vencimento não dá para repetir nos próximos meses. Quando souber a data, edite a conta.',
+        options: a => (a.due ? [[1, 'Só este mês', ''], [3, 'Próximos 3 meses', ''], [6, 'Próximos 6 meses', ''], [12, 'Próximos 12 meses', 'bom para aluguel, escola, internet']] : [[1, 'Só este mês', 'sem data definida']]).map(([v, l, s]) => ({ v, label: l, sub: s, on: a.repeat === v })),
+        apply: (a, v) => { a.repeat = Number(v); } },
+      { id: 'status', type: 'choice', q: a => a.kind === 'parcelada' ? 'Essas parcelas já são certas?' : 'Esse valor já é certo?',
+        options: a => [{ v: 'pendente', label: a.kind === 'parcelada' ? 'Sim, já estou pagando' : 'Sim, a conta já chegou', sub: 'entra em "pendente": dinheiro que vai sair', on: a.status === 'pendente' }, { v: 'planejado', label: 'Ainda é uma previsão', sub: 'entra em "planejado": dá para confirmar depois', on: a.status === 'planejado' }],
+        apply: (a, v) => { a.status = v; } },
+      { id: 'resumo', type: 'summary', q: () => 'Tudo certo?', help: () => 'Vai ser adicionado em "A pagar". Dá para editar ou excluir depois.', body: a => {
           const recs = debtRecords(a, S.ds), tot = C.round2(recs.reduce((s2, r) => s2 + r.amount, 0));
-          body = ask('Tudo certo?', 'Vai ser adicionado em "A pagar". Dá para editar ou excluir depois.') +
-            `<div class="card" style="margin:0 0 12px"><dl class="kv"><dt>Tipo</dt><dd>${esc(DEBT_KINDS[a.kind].label)}</dd><dt>Nome</dt><dd>${esc(a.name)}</dd>
+          return `<div class="card" style="margin:0 0 12px"><dl class="kv"><dt>Tipo</dt><dd>${esc(DEBT_KINDS[a.kind].label)}</dd><dt>Nome</dt><dd>${esc(a.name)}</dd>
               <dt>${a.kind === 'parcelada' ? 'Parcela' : 'Valor'}</dt><dd><b>${M(a.amount, a.currency)}</b></dd>
               ${a.kind === 'parcelada' ? `<dt>Parcelas</dt><dd>${a.count} · total ${M(tot, a.currency)}</dd>` : ''}
               <dt>Vencimento</dt><dd>${a.due ? fdate(a.due) + (recs.length > 1 ? ` e depois todo dia ${Number(a.due.slice(8))}` : '') : 'sem data'}</dd>
               <dt>Situação</dt><dd>${statusBadge(a.status)}</dd></dl></div>
             <div class="card" style="margin:0"><div class="lbl">${recs.length === 1 ? 'Será criada 1 conta' : `Serão criadas ${recs.length} contas`}</div><div class="rows">${recs.slice(0, 4).map(r => `<div class="row-item"><div class="main"><div class="t">${esc(r.description)}</div><div class="s">${r.due_date ? 'vence ' + fdate(r.due_date) : 'sem data'} · ${esc(STATUS_LABEL[r.status] || r.status)}</div></div><div class="amt">${M(r.amount, r.currency)}</div></div>`).join('')}
               ${recs.length > 4 ? `<div class="small muted" style="padding-top:8px">…e mais ${recs.length - 4}, até ${fdate(recs[recs.length - 1].due_date)}</div>` : ''}</div></div>`;
-          break;
-        }
-      }
-      sh.body.innerHTML = body + '<div id="dw-err" class="small" style="color:var(--danger);margin-top:8px"></div>';
-      sh.foot.innerHTML = `<div class="btn-row">${i > 0 ? '<button class="btn secondary" data-back>Voltar</button>' : ''}${auto && step.id !== 'resumo' ? '' : `<button class="btn" data-next>${step.id === 'resumo' ? ic('check') + ' Adicionar' : 'Continuar'}</button>`}</div>`;
-      const inp = sh.body.querySelector('#dw-in');
-      if (inp && inp.type !== 'date') setTimeout(() => inp.focus(), 60);
-      if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); next(); } });
-      if (step.id === 'count') { const upd = () => { const n = parseInt(inp.value, 10); sh.body.querySelector('#dw-tot').innerHTML = n > 0 ? `Total que falta: <b>${M(C.round2(n * a.amount), a.currency)}</b>` : ''; }; inp.addEventListener('input', upd); upd(); }
-      sh.body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { pick(b.dataset.v); next(); });
-      sh.body.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { if (step.id === 'due' && b.dataset.q === '') { a.due = null; i++; draw(); return; } inp.value = b.dataset.q; if (step.id === 'count') inp.dispatchEvent(new Event('input')); next(); });
-      const bk = sh.foot.querySelector('[data-back]'); if (bk) bk.onclick = () => { i--; draw(); };
-      const nx = sh.foot.querySelector('[data-next]'); if (nx) nx.onclick = () => next();
-    }
-    function pick(v) {
-      const id = live()[i].id;
-      if (id === 'kind') { if (a.kind !== v) { a.name = ''; a.count = null; a.repeat = 1; } a.kind = v; }
-      if (id === 'repeat') a.repeat = Number(v);
-      if (id === 'status') a.status = v;
-    }
-    const err = m => { sh.body.querySelector('#dw-err').textContent = m; };
-    async function next() {
-      const step = live()[i], inp = sh.body.querySelector('#dw-in');
-      if (step.id === 'kind' && !a.kind) return err('Escolha uma opção.');
-      if (step.id === 'name') { const v = inp.value.trim(); if (!v) return err('Escreva um nome ou toque numa sugestão.'); a.name = v.slice(0, 60); }
-      if (step.id === 'amount') { const v = C.num(inp.value.trim()); if (!(v > 0)) return err('Digite um valor maior que zero, ex.: 180,50.'); a.amount = C.round2(v); a.currency = sh.body.querySelector('#dw-cur').value; }
-      if (step.id === 'count') { const v = parseInt(inp.value, 10); if (!(v >= 1 && v <= 120)) return err('Digite de 1 a 120 parcelas.'); a.count = v; }
-      if (step.id === 'due') { const v = inp.value; if (!v && a.kind === 'parcelada') return err('Escolha a data da próxima parcela.'); a.due = v || null; }
-      if (step.id === 'repeat' && !a.repeat) return err('Escolha uma opção.');
-      if (step.id === 'status' && !a.status) return err('Escolha uma opção.');
-      if (step.id === 'resumo') {
-        const recs = debtRecords(a, S.ds);
-        const ds2 = C.clone(S.ds); if (!Array.isArray(ds2.obligations)) ds2.obligations = [];
-        ds2.obligations.push(...recs);
-        sh.close();
-        await commit(ds2, { audit: { type: 'obligation-create', description: `Conta a pagar adicionada: ${a.name}` + (recs.length > 1 ? ` (${recs.length} ${a.kind === 'parcelada' ? 'parcelas' : 'meses'})` : '') + ` · ${money(a.amount, a.currency)}` }, toast: recs.length > 1 ? `${recs.length} contas adicionadas` : 'Conta adicionada' });
-        return;
-      }
-      i++; draw();
-    }
-    draw();
+        } }
+    ], finish: async a => {
+      const recs = debtRecords(a, S.ds);
+      const ds2 = C.clone(S.ds); if (!Array.isArray(ds2.obligations)) ds2.obligations = [];
+      ds2.obligations.push(...recs);
+      S.sheets.slice(-1)[0].close();
+      await commit(ds2, { audit: { type: 'obligation-create', description: `Conta a pagar adicionada: ${a.name}` + (recs.length > 1 ? ` (${recs.length} ${a.kind === 'parcelada' ? 'parcelas' : 'meses'})` : '') + ` · ${money(a.amount, a.currency)}` }, toast: recs.length > 1 ? `${recs.length} contas adicionadas` : 'Conta adicionada' });
+    } });
   }
 
   function editObligation(o) {
@@ -5267,7 +5452,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       const ds = { schema_version: C.APP_SCHEMA, source: 'cadastro no app', snapshot_date: today, currency_default: cur, settings: { main_currency: cur, exchange_rates: {} }, accounts: [], credit_facilities: [], transactions: [], obligations: [], audit_log: [], deleted_records: [] };
       await commit(ds, { audit: { type: 'start', description: 'Início do zero, moeda principal ' + cur } });
       go('inicio');
-      openAccountForm(null);
+      openAccountWizard();
     };
   }
 
@@ -5793,7 +5978,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
     'gh-save': () => ghSaveConfig(),
-    'acc-new': () => openAccountForm(null),
+    'acc-new': () => openAccountWizard(),
+    'save-money': () => openSaveWizard(),
     'sy-go': () => syGo(),
     'sy-mode': el => { const e = document.getElementById('sy-email'); if (e) S.syEmail = e.value; S.syMode = el.dataset.mode || (S.syMode === 'signup' ? 'login' : 'signup'); S.syLinkMsg = null; render(); },
     'pw-toggle': el => { const i = document.getElementById(el.dataset.id); if (!i) return; const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'esconder' : 'mostrar'; },
@@ -5841,7 +6027,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'gh-push': () => ghPush(),
     'gh-pull': () => ghPull(),
     'gh-disconnect': () => ghDisconnect(),
-    'tx-new': () => openTxForm(null),
+    'tx-new': () => openTxWizard(),
     'tx-edit': el => openTxDetail(el.dataset.id),
     card: el => openCard(el.dataset.id),
     'ext-set': el => { S.ext = S.ext || extDefaults(); S.ext[el.dataset.k] = el.dataset.v; render(); },
