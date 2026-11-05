@@ -19,7 +19,8 @@ export function carregar(nome) {
   const ctx = vm.createContext({
     module: modulo, exports: modulo.exports, self: undefined,
     require: p => { if (!deps[p]) throw new Error('dependência desconhecida: ' + p); return deps[p](); },
-    crypto: globalThis.crypto, TextEncoder, TextDecoder, btoa, atob, console, Intl, Date, Math, JSON
+    crypto: globalThis.crypto, TextEncoder, TextDecoder, btoa, atob, console, Intl, Date, Math, JSON,
+    DecompressionStream: globalThis.DecompressionStream
   });
   vm.runInContext(codigo, ctx, { filename: `index.html#${nome}` });
   return (cache[nome] = modulo.exports);
