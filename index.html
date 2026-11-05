@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-HR0uue75BO6LtlaiD7muOhcV3yWr8R+NZSmTOkkNuFc='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ND0eiYZpNMfWq7GSw2Eqr38Ya/x/6aNkru2KG8eeHck='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -377,6 +377,83 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
 .wl-more-t { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 10px; }
 @media (max-width: 350px) { .wl-hero h1 { font-size: 27px; } }
 @media (prefers-reduced-motion: reduce) { .wl-mock { transform: none; } }
+/* ================= computador (tela larga): layout próprio ================= */
+.desk-only { display: none !important; }
+@media (min-width: 1024px) {
+  :root { --side-w: 260px; }
+  .desk-only { display: revert !important; }
+  .mob-only { display: none !important; }
+  body { background-attachment: fixed; }
+  #app { max-width: 1200px; margin: 0 auto; padding: 32px 44px 72px calc(var(--side-w) + 44px); box-sizing: content-box; }
+  body[data-view="welcome"] #app, body[data-view="login"] #app { padding: 32px 44px 72px; }
+  .page-title { font-size: 34px; margin: 4px 0 18px; }
+  /* menu lateral no lugar da barra de baixo */
+  .tabbar { top: 18px; bottom: 18px; left: 18px; right: auto; width: calc(var(--side-w) - 36px); max-width: none; margin: 0; border-radius: 28px; padding: 22px 14px 16px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+  .tabbar nav { flex-direction: column; height: auto; gap: 4px; padding: 0; max-width: none; margin: 0; }
+  .tabbar button { flex: none; flex-direction: row; justify-content: flex-start; gap: 13px; padding: 12px 14px; font-size: 15px; font-weight: 650; color: var(--ink-2); border-radius: 15px; }
+  .tabbar button:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .tabbar button svg { width: 21px; height: 21px; }
+  .tabbar button.on { color: var(--accent); }
+  .tabbar button.on::before { inset: 0; border-radius: 15px; }
+  .tabbar .pip { top: 50%; right: 14px; transform: translateY(-50%); }
+  .tb-brand { display: flex !important; align-items: center; gap: 11px; padding: 2px 8px 6px; font-size: 21px; letter-spacing: -0.02em; }
+  .tb-logo { width: 38px; height: 38px; border-radius: 11px; overflow: hidden; box-shadow: 0 6px 16px rgba(6, 40, 44, .25); flex: none; }
+  .tb-logo svg { width: 100%; height: 100%; display: block; }
+  .tb-actions { display: grid !important; gap: 8px; margin-top: auto; }
+  .tabbar .tb-actions .btn { padding: 11px 12px; font-size: 14px; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; margin: 0; color: var(--accent-ink, #fff); border-radius: 14px; }
+  .tabbar .tb-actions .btn.secondary { color: var(--ink); }
+  .tabbar .tb-actions .btn::before { display: none; }
+  .tb-actions .btn svg { width: 17px; height: 17px; }
+  .fab { display: none; }
+  .askbar { left: calc(var(--side-w) + 44px); right: 44px; bottom: 22px; max-width: 900px; margin: 0 auto; }
+  .toast { bottom: 28px; left: calc(50% + var(--side-w) / 2); }
+  /* janelas: centralizadas, no meio da tela */
+  .sheet-wrap { align-items: center; padding: 24px; }
+  .sheet { max-width: 600px; border-radius: 26px; border-bottom: 1px solid var(--glass-edge); max-height: 88vh; box-shadow: 0 30px 80px rgba(5, 20, 25, .35); }
+  .sheet.full { height: 88vh; max-width: 760px; }
+  .sheet .grabber { display: none; }
+  /* início: duas colunas */
+  .home { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(330px, 1fr); gap: 30px; align-items: start; }
+  .h-side { position: sticky; top: 24px; }
+  .h-side > .section-title:first-of-type { margin-top: 0; }
+  .topbar { margin: 0 0 18px; }
+  .topbar .name { font-size: 30px; }
+  .hero { padding: 26px 28px; }
+  .hero .big { font-size: 48px; }
+  .hero .pill .v { font-size: 19px; }
+  .quick { max-width: 620px; gap: 14px; }
+  .quick button span { width: 62px; height: 62px; border-radius: 20px; }
+  .state-card { display: block !important; width: 100%; text-align: left; border: 1px solid var(--glass-edge); cursor: pointer; margin-bottom: 18px; }
+  .state-card:hover { box-shadow: 0 10px 30px rgba(8, 40, 44, .16); }
+  .card.row-item:hover, .row-item:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  /* Mais: grupos em duas colunas */
+  .mais-cols { columns: 2; column-gap: 26px; }
+  .mgroup { break-inside: avoid; display: inline-block; width: 100%; }
+  /* páginas de texto e listas: largura confortável de leitura */
+  body[data-view^="page-"] #app > *, body[data-view="tab-contas"] #app > *, body[data-view="tab-extrato"] #app > * { max-width: 980px; }
+  body[data-view="tab-pergunte"] #app { max-width: 860px; }
+  body[data-view="tab-pergunte"] .bubble { max-width: 75%; }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chips { flex-wrap: wrap; }
+  /* boas-vindas: texto à esquerda, exemplo à direita */
+  .wl { max-width: 1080px; margin: 0 auto; position: relative; }
+  .wl-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); column-gap: 56px; align-items: center; margin-top: 18px; }
+  .wl-grid > * { grid-column: 1; }
+  .wl-grid > .wl-mock { grid-column: 2; grid-row: 1 / span 8; margin: 0; transform: rotate(-2deg) scale(1.04); }
+  .wl-hero { text-align: left; padding-top: 10px; }
+  .wl-logo { margin: 0 0 18px; }
+  .wl-hero h1 { font-size: 46px; margin: 16px 0 12px; max-width: 15ch; }
+  .wl-sub { margin: 0; font-size: 18px; max-width: 40ch; }
+  .wl-micro { text-align: left; }
+  .btn.wl-cta, .btn.wl-login, .wl-grid > .btn { max-width: 420px; }
+  .wl-pts { margin-left: 0; }
+  .wl-top { position: absolute; top: 24px; right: 44px; margin: 0; }
+  .wl-more { max-width: 520px; margin: 34px auto 0; }
+  .wl > .notice { max-width: 640px; margin-left: auto; margin-right: auto; }
+  /* tela de entrar sem dados: cartão central */
+  body[data-view="login"] #app { max-width: 480px; }
+}
+@media (min-width: 1440px) { :root { --side-w: 280px; } #app { max-width: 1280px; } .hero .big { font-size: 54px; } }
 /* marca: tela de boas-vindas e tela de entrar */
 .brand { display: grid; justify-items: center; gap: 8px; text-align: center; margin: 18px 0 20px; }
 .brand .ic { width: 84px; height: 84px; border-radius: 22px; overflow: hidden; box-shadow: 0 12px 30px rgba(6, 40, 44, .28); }
@@ -2648,24 +2725,34 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     }
   }
   const SUGGESTIONS = ['Qual meu patrimônio total?', 'Como está meu mês?', 'Onde mais gastei este mês?', 'Quanto recebi este mês?', 'Quais contas vencem esta semana?', 'Mostre meu extrato deste mês', 'Gere um PDF do relatório do mês'];
-  // Sugestões montadas com os dados da pessoa (nomes das contas, mês atual, categoria em que mais gasta…).
+  // Sugestões SÓ com o que existe nos dados da pessoa (nada inventado). Sem dados, nenhuma: a tela mostra a ajuda.
   function suggestions(ds, today) {
-    if (!ds || !Array.isArray(ds.accounts)) return [{ title: 'Exemplos', items: SUGGESTIONS }];
+    if (!ds || !Array.isArray(ds.accounts) || !ds.accounts.some(a => a && a.name)) return [];
     const accs = ds.accounts.filter(a => a && a.name);
     const free = accs.filter(a => !/protegid|espanha|reserva/.test(C.norm(a.status)));
-    const acc = (free[0] || accs[0] || {}).name, acc2 = (free[1] || free[0] || accs[0] || {}).name;
+    const acc = (free[0] || accs[0] || {}).name;
     const hasRes = accs.some(a => /protegid|espanha|reserva/.test(C.norm(a.status)));
+    const txs = (ds.transactions || []).filter(t => t && C.txStatus(t) === 'confirmado');
+    const desp = txs.filter(t => C.txType(t) === 'despesa' && t.description), rec = txs.filter(t => C.txType(t) === 'receita');
     const mes = R.periodRange('mes', today);
-    const cats = topcatsAnswer({ period: mes }, ds, today).lines || [];
-    const cat = cats[0] ? cats[0].label : 'Alimentação/Compras';
+    const cats = desp.length ? (topcatsAnswer({ period: mes }, ds, today).lines || []) : [];
+    const cat = cats[0] && cats[0].label && !/sem categoria/i.test(cats[0].label) ? cats[0].label : null;
+    // gasto mais frequente da pessoa, com o último valor dela
+    const cnt = {}; desp.slice(-300).forEach(t => { const k = t.description.trim(); cnt[k] = cnt[k] || { n: 0, t }; cnt[k].n++; cnt[k].t = t; });
+    const top = Object.values(cnt).sort((x, y) => y.n - x.n)[0];
+    const topAcc = top && accs.find(a => a.id === top.t.account_id);
+    const obl = (ds.obligations || []).filter(o => o && C.isObligationOpen(o));
     const prox = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1).toLocaleDateString('pt-BR', { month: 'long' });
+    let tl = null; try { tl = C.trafficLight(ds, today); } catch (e) { tl = null; }
+    const guardar = tl && tl.canSave >= 100 ? Math.max(50, Math.floor(tl.canSave / 2 / 50) * 50) : 0;
+    const brl = v => 'R$ ' + (Math.round(v * 100) % 100 ? Number(v).toFixed(2) : String(Math.round(v))).replace('.', ',');
     const groups = [
-      { title: 'Estado financeiro', items: ['Como estou financeiramente?', 'Quanto posso guardar?', 'Se eu guardar R$ 500, meu semáforo muda?', 'Qual conta devo pagar primeiro?', 'O que preciso fazer para sair do vermelho?'] },
-      { title: 'Saldos', items: ['Qual meu patrimônio total?', acc && `Quanto tenho no ${acc}?`, hasRes && 'Quanto tenho guardado nas reservas?', ds.credit_facilities && ds.credit_facilities.length && 'Quanto tenho de limite no cartão?'] },
-      { title: 'Gastos e entradas', items: ['Como está meu mês?', 'Onde mais gastei este mês?', `Quanto gastei com ${cat} este mês?`, 'Qual foi a maior despesa do mês?', 'Quanto gastei no mês passado?', 'Quanto recebi este mês?'] },
-      { title: 'Contas a pagar', items: ['Quais contas vencem esta semana?', `Quais contas vencem em ${prox}?`, 'Quais contas estão vencidas?'] },
-      { title: 'Lançar', items: [acc && `Registre R$ 25 de mercado no ${acc}`, acc2 && `Paguei R$ 120 de luz no ${acc2}`, acc && `Recebi R$ 500 no ${acc}`] },
-      { title: 'Documentos', items: ['Mostre meu extrato deste mês', 'Gere um PDF do relatório do mês', 'Gere uma planilha dos gastos do mês', 'Gere uma imagem do resumo para compartilhar'] }
+      { title: 'Estado financeiro', items: ['Como estou financeiramente?', tl && tl.canSave > 0 && 'Quanto posso guardar?', guardar && `Se eu guardar ${brl(guardar)}, meu semáforo muda?`, obl.length && 'Qual conta devo pagar primeiro?', tl && tl.level === 'VERMELHO' && 'O que preciso fazer para sair do vermelho?'] },
+      { title: 'Saldos', items: [accs.length > 1 && 'Qual meu patrimônio total?', acc && `Quanto tenho no ${acc}?`, hasRes && 'Quanto tenho guardado nas reservas?', ds.credit_facilities && ds.credit_facilities.length && 'Quanto tenho de limite no cartão?'] },
+      { title: 'Gastos e entradas', items: desp.length ? ['Como está meu mês?', 'Onde mais gastei este mês?', cat && `Quanto gastei com ${cat} este mês?`, 'Qual foi a maior despesa do mês?', rec.length && 'Quanto recebi este mês?'] : [] },
+      { title: 'Contas a pagar', items: obl.length ? ['Quais contas vencem esta semana?', `Quais contas vencem em ${prox}?`, obl.some(o => C.dateOnly(o.due_date) && C.dateOnly(o.due_date) < today) && 'Quais contas estão vencidas?'] : [] },
+      { title: 'Lançar', items: [top && (topAcc || acc) && `Registre ${brl(C.num(top.t.amount))} de ${top.t.description.toLowerCase()} no ${(topAcc || {}).name || acc}`] },
+      { title: 'Documentos', items: txs.length ? ['Mostre meu extrato deste mês', 'Gere um PDF do relatório do mês'] : [] }
     ];
     return groups.map(g => ({ title: g.title, items: g.items.filter(Boolean) })).filter(g => g.items.length);
   }
@@ -3728,6 +3815,7 @@ REGRAS
   // ---------- render raiz ----------
   function render() {
     document.body.classList.toggle('hide-values', !!S.meta.hide_values);
+    document.body.dataset.view = !S.ds ? (S.page === 'sync' ? 'login' : 'welcome') : S.page ? 'page-' + S.page : 'tab-' + S.tab; // layouts próprios no computador
     if (S.locked) { renderLock(); return; }
     const lk = document.querySelector('.lock'); if (lk) lk.remove();
     if (!S.ds && S.page === 'sync') { app.innerHTML = `<button class="back" data-act="tab" data-tab="inicio">${ic('left')}Voltar</button>` + pageSync().replace(/^<button class="back"[^>]*>[\s\S]*?<\/button>/, ''); renderTabbar(false); renderAskbar(false); return; }
@@ -3754,8 +3842,9 @@ REGRAS
     if (!show) { if (tb) tb.remove(); return; }
     if (!tb) { tb = document.createElement('div'); tb.className = 'tabbar'; document.body.appendChild(tb); }
     const tabs = [['inicio', 'home', 'Início'], ['extrato', 'list', 'Extrato'], ['pergunte', 'chat', 'Pergunte'], ['contas', 'bill', 'A pagar'], ['mais', 'more', 'Mais']];
-    tb.innerHTML = '<nav aria-label="Navegação principal">' + tabs.map(([k, i, l]) =>
-      `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}" aria-current="${S.tab === k ? 'page' : 'false'}">${ic(i)}<span>${l}</span>${k === 'mais' && S.meta.dirty ? '<i class="pip" aria-label="backup pendente"></i>' : ''}</button>`).join('') + '</nav>';
+    tb.innerHTML = `<div class="tb-brand desk-only"><span class="tb-logo">${logoSvg()}</span><b>Cofre</b></div>` + '<nav aria-label="Navegação principal">' + tabs.map(([k, i, l]) =>
+      `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}" aria-current="${S.tab === k ? 'page' : 'false'}">${ic(i)}<span>${l}</span>${k === 'mais' && S.meta.dirty ? '<i class="pip" aria-label="backup pendente"></i>' : ''}</button>`).join('') + '</nav>'
+      + `<div class="tb-actions desk-only"><button class="btn" data-act="tx-new">${ic('plus')} Novo lançamento</button><button class="btn secondary" data-act="receipt-read">${ic('scan')} Ler comprovante</button><button class="btn secondary" data-act="save-money">${ic('lock')} Guardar dinheiro</button></div>`;
   }
   function backBar(label, tab) { return `<button class="back" data-act="tab" data-tab="${tab || S.tab}">${ic('left')}${esc(label || 'Voltar')}</button>`; }
 
@@ -3781,6 +3870,7 @@ REGRAS
     return `<div class="wl">
     ${!syReady() ? `<div class="wl-top"><button class="wl-top-in" data-act="go-login">Entrar</button></div>` : ''}
     ${S.loggedOut && !syReady() ? `<div class="notice ok" style="margin-top:8px">${ic('check')}<div class="ntext"><b>Você saiu da conta</b> e os dados foram apagados deste aparelho. Para voltar, toque em <b>Entrar</b>: tudo é baixado da nuvem.</div></div>${loginBtn}` : ''}
+    <div class="wl-grid">
     <section class="wl-hero">
       <div class="wl-logo">${logoSvg()}</div>
       <div class="wl-eyebrow">Cofre · finanças da família, sem planilha</div>
@@ -3805,6 +3895,7 @@ REGRAS
       <div><i>${ic('target')}</i><span><b>Metas e contas a pagar</b> sempre à vista</span></div>
       <div><i>${ic('shield')}</i><span><b>Criptografado</b> e para usar com a <b>família</b></span></div>
     </div>
+    </div>
     <div class="wl-more"><div class="wl-more-t">Outras formas de começar</div>
       <button class="btn secondary" data-act="import-welcome">${ic('up')} Importar backup JSON</button>
       <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
@@ -3815,6 +3906,15 @@ REGRAS
   const WARNING_TEXT = 'Dados salvos neste dispositivo podem ser perdidos se o navegador limpar armazenamento, o aparelho for restaurado ou o app for removido. Faça backup externo.';
 
   // ---------- INÍCIO ----------
+  // Só no computador: cartão do estado financeiro ao lado (no celular a pílula do topo faz isso).
+  function deskStateCard() {
+    let tl; try { tl = C.trafficLight(S.ds, todayStr()); } catch (e) { return ''; }
+    const MC = tl.currency, cls = l => /DADOS/.test(l) ? 'none' : l;
+    return `<button class="card desk-only state-card" data-act="light"><div class="lbl">Seu estado financeiro</div>
+      <div style="display:flex;gap:8px;align-items:center;margin:8px 0 10px;flex-wrap:wrap"><span class="light ${cls(tl.level)}">${esc(tl.level)}</span><span class="small muted">agora · em ${tl.policy.horizon_days} dias:</span><span class="light ${cls(tl.projected)}" style="font-size:12px">${esc(tl.projected)}</span></div>
+      <dl class="kv"><dt>Disponível</dt><dd>${M(tl.free, MC)}</dd><dt>A pagar em ${tl.policy.horizon_days} dias</dt><dd>${M(tl.due, MC)}</dd><dt>Dia mais apertado</dt><dd><b>${M(tl.minBalance, MC)}</b> <span class="tiny muted">${esc(fdate(tl.minDate))}</span></dd><dt>Pode guardar hoje</dt><dd>${M(tl.canSave, MC)}</dd></dl>
+      <div class="small" style="color:var(--accent);font-weight:700;margin-top:8px">Ver detalhes e simular →</div></button>`;
+  }
   function lightPill() {
     const lvl = C.trafficLight(S.ds, todayStr()).level, cls = /DADOS/.test(lvl) ? 'none' : lvl;
     return `<button class="light ${cls}" data-act="light" aria-label="Semáforo financeiro: ${esc(lvl)}">${esc(/DADOS/.test(lvl) ? 'SEM DADOS' : lvl)}</button>`;
@@ -3846,6 +3946,7 @@ REGRAS
       <div style="display:flex;gap:8px;align-items:center">${lightPill()}<button class="icon-btn" data-act="toggle-hide" aria-label="${S.meta.hide_values ? 'Mostrar valores' : 'Esconder valores'}">${ic(S.meta.hide_values ? 'eyeOff' : 'eye')}</button></div></div>`;
     if (S.meta.dirty) h += `<div class="notice warn">${ic('alert')}<div class="ntext"><b>Backup pendente.</b> Há alterações desde ${lastExp ? 'o último backup (' + fdatetime(lastExp) + ')' : 'que o app foi preenchido'}. <button class="link" data-act="export" data-kind="json">Exportar agora</button></div></div>`;
     if (sum.overdue.length) h += `<div class="notice danger">${ic('clock')}<div class="ntext"><b>${sum.overdue.length} conta(s) com vencimento passado</b> ainda em aberto. <button class="link" data-act="tab" data-tab="contas">Ver</button></div></div>`;
+    h += `<div class="home"><div class="h-main">`;
     h += `<section class="hero" aria-label="Patrimônio">
       <div class="label">Patrimônio total em ${esc(curName(MC))} · dinheiro próprio conhecido</div>
       <div class="big">${M(sum.totalMain, MC)}</div>
@@ -3890,6 +3991,7 @@ REGRAS
       h += `<div class="card" style="display:flex;align-items:center;gap:12px"><div class="ico" style="width:40px;height:40px;border-radius:12px;background:var(--card-2);display:grid;place-items:center">🪙</div><div style="flex:1"><b>Cashback InfinitePay</b><div class="small muted">${cb.redeemed ? 'Resgatado' : 'Pendente · não somado ao saldo'}</div></div><b>${M(C.num(cb.infinitepay_accrued_brl))}</b></div>`;
     }
 
+    h += `</div><div class="h-side">` + deskStateCard();
     h += `<div class="section-title"><span>${esc(monthLabel(mp.month))}</span><button class="link" data-act="page" data-tab="mais" data-page="relatorios">Relatórios</button></div>
       <div class="stat-grid">
         <div class="stat"><div class="k">Entradas confirmadas</div><div class="v" style="color:var(--pos)">${M(conf.in, MC)}</div><div class="s">lançadas no app</div></div>
@@ -3921,6 +4023,7 @@ REGRAS
       <dt>Último backup exportado</dt><dd>${lastExp ? fdatetime(lastExp) : '<span style="color:var(--warn)">nunca</span>'}</dd>
       <dt>Última alteração no app</dt><dd>${S.meta.last_modified_at ? fdatetime(S.meta.last_modified_at) : '—'}</dd>
       <dt>Origem</dt><dd class="small">${esc(ds.source || '—')}</dd></dl></div>`;
+    h += `</div></div>`;
     h += `<p class="tiny muted" style="text-align:center">${navigator.onLine ? 'Conectado' : '✈︎ Sem internet — funcionando offline'} · nenhum dado sai do aparelho sem você exportar</p>`;
     return h;
   }
@@ -4573,8 +4676,8 @@ REGRAS
         input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero, ex.: 25,90.'; a.amount = n; } },
       { id: 'desc', when: a => (a.type === 'despesa' || a.type === 'receita') && !(preset && preset.obligation_id), type: 'input', q: a => a.type === 'despesa' ? 'Com o quê?' : 'De onde veio?', help: a => a.receipt && a.receipt.description && a.description === a.receipt.description.slice(0, 80) ? rcHelp('Nome que está no comprovante. Pode trocar por algo que você reconheça, ex.: Mercado.') : 'Escreva do seu jeito. A categoria é sugerida pelo que você escrever.',
         input: a => ({ kind: 'text', value: a.description, placeholder: a.type === 'despesa' ? 'ex.: Mercado' : 'ex.: Salário' }),
-        quick: a => uniq(frequentDescriptions(a.type, 4).concat(a.type === 'despesa' ? ['Mercado', 'Uber', 'Farmácia', 'Restaurante', 'Combustível', 'Padaria'] : ['Salário', 'Pix recebido', 'Reembolso', 'Venda', 'Rendimento'])).slice(0, 8).map(x => [x, x]),
-        apply: (a, v) => { if (!v) return 'Escreva uma descrição curta ou toque numa sugestão.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : (a.category ? a.category_auto : null); } } },
+        quick: a => uniq(frequentDescriptions(a.type, 8)).map(x => [x, x]), // só o que a própria pessoa já lançou
+        apply: (a, v) => { if (!v) return 'Escreva uma descrição curta.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : (a.category ? a.category_auto : null); } } },
       { id: 'cat', when: a => a.type === 'despesa' && !(preset && preset.obligation_id), type: 'choice', q: () => 'Qual categoria?', help: a => a.category_auto === 'leitura do comprovante' ? 'Sugerida pela leitura do comprovante. Toque para confirmar ou trocar.' : a.category_auto ? `Sugeri pela palavra “${esc(a.category_auto)}”. Toque para confirmar ou trocar.` : 'Escolha a que mais combina.',
         options: a => C.CATEGORIES.map(c => ({ v: c, label: esc(c) + (a.category === c && a.category_auto ? ' <span class="badge">sugerida</span>' : ''), on: a.category === c })).concat([{ v: '', label: 'Sem categoria', on: false }]),
         apply: (a, v) => { a.catManual = v !== a.category || a.catManual; a.category = v; if (a.catManual) a.category_auto = null; } },
@@ -4824,7 +4927,6 @@ REGRAS
   }
 
   // ---------- guardar dinheiro ----------
-  const RESERVE_NAMES = ['Reserva de emergência', 'Viagem', 'Carro', 'Casa própria', 'Estudos', 'Aposentadoria', 'Presentes'];
   function openSaveWizard() {
     const today = todayStr(), ds = S.ds;
     const reserves = () => (ds.accounts || []).filter(x => x && x.id && isReserveAcc(x));
@@ -4837,7 +4939,7 @@ REGRAS
     const inMonths = k => addMonthsYmd(today, k);
     runWizard({ title: 'Guardar dinheiro', a, finishLabel: 'Guardar', steps: [
       { id: 'amount', type: 'input', q: () => 'Quanto você quer guardar?', input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }),
-        quick: () => [50, 100, 200, 500].map(n => [String(n), money(n, C.mainCurrency(ds)).replace(/,00$/, '')]), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero.'; a.amount = n; } },
+        apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero.'; a.amount = n; } },
       { id: 'from', type: 'choice', q: () => 'De qual conta sai o dinheiro?', options: a => { const o = accountOptions(x => !isReserveAcc(x), a.from); return o.length ? o : accountOptions(() => true, a.from); },
         apply: (a, v) => { a.from = v; } },
       { id: 'to', decides: true, type: 'choice', q: () => 'Para onde vai?', help: () => 'Reserva é dinheiro guardado: entra no patrimônio, mas não no "disponível em conta".',
@@ -4845,14 +4947,14 @@ REGRAS
           .concat([{ v: '__nova', label: '+ Criar uma reserva nova', sub: 'emergência, viagem, carro…', on: a.to === '__nova' }]),
         apply: (a, v) => { a.to = v; a.amount_to = null; } },
       { id: 'newName', when: a => a.to === '__nova', type: 'input', q: () => 'Qual o nome da reserva?', input: a => ({ kind: 'text', value: a.newName, placeholder: 'ex.: Reserva de emergência' }),
-        quick: () => RESERVE_NAMES.map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva um nome ou toque numa sugestão.'; a.newName = v.slice(0, 50); } },
+        apply: (a, v) => { if (!v) return 'Escreva um nome para a reserva.'; a.newName = v.slice(0, 50); } },
       { id: 'newInst', when: a => a.to === '__nova', type: 'input', q: () => 'Onde esse dinheiro fica guardado?', help: () => 'O banco ou a corretora. Pode ser o mesmo da conta de origem (ex.: caixinha do Nubank).',
         input: a => ({ kind: 'text', value: a.newInst || ((ds.accounts || []).find(x => x.id === a.from) || {}).institution || '', placeholder: 'ex.: Nubank' }),
-        quick: a => uniq([((ds.accounts || []).find(x => x.id === a.from) || {}).institution].concat(BANKS.slice(0, 6))).map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva onde fica (banco, corretora…).'; a.newInst = v.slice(0, 40); } },
+        quick: a => uniq([((ds.accounts || []).find(x => x.id === a.from) || {}).institution].concat((ds.accounts || []).map(x => x && x.institution))).slice(0, 6).map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva onde fica (banco, corretora…).'; a.newInst = v.slice(0, 40); } },
       { id: 'goal', decides: true, when: a => a.to === '__nova', type: 'choice', q: () => 'Quer definir uma meta?', help: () => 'Com meta, a tela inicial mostra quanto falta.',
         options: a => [{ v: 'sim', label: 'Sim, quero juntar um valor', on: a.goal === true }, { v: 'nao', label: 'Agora não', sub: 'dá para definir depois', on: a.goal === false }], apply: (a, v) => { a.goal = v === 'sim'; if (!a.goal) { a.goalAmount = null; a.goalDate = null; } } },
       { id: 'goalAmount', when: a => a.to === '__nova' && a.goal, type: 'input', q: () => 'Quanto você quer juntar?', input: a => ({ kind: 'money', value: a.goalAmount ? String(a.goalAmount).replace('.', ',') : '', placeholder: '0,00' }),
-        quick: a => [1000, 5000, 10000, 20000].map(n => [String(n), money(n, curOf(a.from)).replace(/,00$/, '')]), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite o valor da meta.'; a.goalAmount = n; } },
+        apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite o valor da meta.'; a.goalAmount = n; } },
       { id: 'goalDate', when: a => a.to === '__nova' && a.goal, type: 'input', q: () => 'Até quando?', input: a => ({ kind: 'date', value: a.goalDate || '', label: 'Ou escolha a data' }),
         quick: () => [[inMonths(6), 'Em 6 meses'], [inMonths(12), 'Em 1 ano'], [inMonths(24), 'Em 2 anos'], ['', 'Sem prazo']], apply: (a, v) => { a.goalDate = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null; } },
       { id: 'amountTo', when: a => a.to && a.to !== '__nova' && destCur() !== curOf(a.from), type: 'input', q: a => `Quanto chegou em ${destCur()}?`, help: () => 'A reserva é em outra moeda. Preenchi pela cotação; ajuste para o valor que realmente chegou.',
@@ -4893,7 +4995,7 @@ REGRAS
     const a = { bank: '', name: '', currency: MC, balance: null, date: today, reserve: null };
     runWizard({ title: 'Nova conta', a, finishLabel: 'Cadastrar conta', steps: [
       { id: 'bank', type: 'input', q: () => 'Qual o banco?', help: () => 'Ou corretora, carteira digital, dinheiro em casa…', input: a => ({ kind: 'text', value: a.bank, placeholder: 'ex.: Nubank' }),
-        quick: () => BANKS.slice(0, 12).map(x => [x, x]).concat([['Dinheiro em espécie', 'Dinheiro em espécie']]), apply: (a, v) => { if (!v) return 'Escreva o nome ou toque numa sugestão.'; if (a.bank !== v) a.name = ''; a.bank = v.slice(0, 40); } },
+        quick: () => uniq((S.ds.accounts || []).map(x => x && x.institution)).slice(0, 8).map(x => [x, x]), apply: (a, v) => { if (!v) return 'Escreva o nome do banco (ou "Dinheiro em espécie").'; if (a.bank !== v) a.name = ''; a.bank = v.slice(0, 40); } },
       { id: 'name', type: 'input', q: () => 'Como quer chamar essa conta?', help: a => `Útil se você tem mais de uma no ${esc(a.bank)}. Toque em “${esc(a.bank)}” para usar só o nome do banco.`,
         input: a => ({ kind: 'text', value: a.name, placeholder: 'ex.: Conta salário' }), quick: a => [[a.bank, a.bank], [a.bank + ' · conta corrente', 'Conta corrente'], [a.bank + ' · poupança', 'Poupança'], [a.bank + ' · caixinha', 'Caixinha']],
         apply: (a, v) => { a.name = (v || a.bank).slice(0, 50); } },
@@ -4925,8 +5027,8 @@ REGRAS
     runWizard({ title: 'Adicionar conta a pagar', a, finishLabel: 'Adicionar', steps: [
       { id: 'kind', decides: true, type: 'choice', q: () => 'O que você quer adicionar?', options: a => Object.entries(DEBT_KINDS).map(([k, d]) => ({ v: k, label: d.label, sub: d.sub, on: a.kind === k })),
         apply: (a, v) => { if (a.kind !== v) { a.name = ''; a.count = null; a.repeat = 1; } a.kind = v; } },
-      { id: 'name', type: 'input', q: () => 'Qual o nome?', help: () => 'Como você chama essa conta. Toque numa sugestão ou escreva.', input: a => ({ kind: 'text', value: a.name, placeholder: 'ex.: ' + DEBT_KINDS[a.kind].names[0] }),
-        quick: a => DEBT_KINDS[a.kind].names.map(n => [n, n]), apply: (a, v) => { if (!v) return 'Escreva um nome ou toque numa sugestão.'; a.name = v.slice(0, 60); } },
+      { id: 'name', type: 'input', q: () => 'Qual o nome?', help: () => 'Como você chama essa conta, do seu jeito.', input: a => ({ kind: 'text', value: a.name, placeholder: 'ex.: ' + DEBT_KINDS[a.kind].names[0] }),
+        apply: (a, v) => { if (!v) return 'Escreva um nome para identificar.'; a.name = v.slice(0, 60); } },
       { id: 'amount', type: 'input', q: a => a.kind === 'parcelada' ? 'Qual o valor de cada parcela?' : 'Qual o valor?', help: a => a.kind === 'conta' ? 'Se varia todo mês (como a luz), use uma média: dá para corrigir depois.' : '',
         input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }),
         extra: a => `<div style="display:flex;justify-content:center;margin-top:10px"><select class="input" id="dw-cur" style="width:auto;padding:8px 12px;font-size:14px">${currencyOptions(a.currency)}</select></div>`,
@@ -5063,7 +5165,7 @@ REGRAS
     const st = SY && SY.state, logged = !!(st && st.session && st.user), ready = syReady();
     const sum = C.summarize(S.ds), auto = C.autoRatesState();
     const row = (p, i, t, s, extra) => `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${extra || ''}${ic('right', 'chev')}</button>`;
-    const group = (title, rows) => `<div class="section-title"><span>${title}</span></div><div class="card"><div class="rows">${rows.join('')}</div></div>`;
+    const group = (title, rows) => `<div class="mgroup"><div class="section-title"><span>${title}</span></div><div class="card"><div class="rows">${rows.join('')}</div></div></div>`;
     let h = `<h1 class="page-title">Mais</h1>`;
     // ---- conta ----
     if (logged) {
@@ -5079,6 +5181,7 @@ REGRAS
           <button class="btn" data-act="page" data-tab="mais" data-page="sync">Entrar ou criar conta</button></div>`;
     }
     // ---- grupos ----
+    h += `<div class="mais-cols">`;
     h += group('Ferramentas', [
       row('docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'),
       row('leitor', 'scan', 'Leitor de comprovantes', S.ia && iaReady() ? 'lendo fotos com ' + esc(Leitor.PROVIDERS[iaActive().provider].name) + (iaActive().source === 'familia' ? ' (chave da família)' : '') : 'PDF no aparelho · fotos com IA (opcional)'),
@@ -5098,6 +5201,7 @@ REGRAS
       row('dados', 'file', 'Todos os dados', 'tudo o que está guardado, sem filtros')
     ]);
     h += group('Sobre', [row('sobre', 'info', 'Sobre e avisos', 'como o app funciona · versão ' + APP_VERSION)]);
+    h += `</div>`;
     return h;
   }
 
@@ -5854,6 +5958,106 @@ REGRAS
   // Baixa, junta e envia. Sem conexão: tenta de novo depois, sem perder nada.
   let syRunning = null, syTimer = null;
   function syLater(ms) { clearTimeout(syTimer); syTimer = setTimeout(() => { syRun(false); }, ms || 2500); }
+  // Baixa (e confere a assinatura de) todos os registros do cofre depois de `since`.
+  async function syFetch(V, since) {
+    const signOf = {};
+    (await rest('profiles?select=user_id,sign_public_key')).forEach(p => { signOf[p.user_id] = p.sign_public_key; });
+    const remote = []; let cursor = since || 0, bad = 0;
+    for (;;) {
+      const rows = await rest(`records?select=rid,ciphertext,iv,key_version,sig,deleted,rev,updated_by&vault_id=eq.${V}&rev=gt.${cursor}&order=rev.asc&limit=500`);
+      for (const r of rows) {
+        cursor = Math.max(cursor, r.rev);
+        const ok = signOf[r.updated_by] && await Sigilo.verifyRecord(signOf[r.updated_by], V, r.rid, r.key_version, r.iv, r.ciphertext, r.deleted, r.sig);
+        if (!ok) { bad++; continue; }
+        let payload; try { payload = await Sigilo.openRecord(SY.keys.data, V, r.rid, r.key_version, r); } catch (e) { bad++; continue; }
+        if (!payload || !payload.key || await Sigilo.rid(SY.keys.rid, payload.key) !== r.rid || !!payload.deleted !== !!r.deleted) { bad++; continue; }
+        remote.push({ payload, hash: payload.deleted ? undefined : await Sync.hashOf(payload) });
+      }
+      if (rows.length < 500) break;
+    }
+    return { remote, cursor, bad };
+  }
+  // Registros "de bastidor" que viajam com o cofre mas ficam fora dos dados: chave da IA da família e cotação do dia.
+  const FX_SYNC_KEY = '__cotacao';
+  async function sideRecords() {
+    const out = {};
+    if (S.ia && S.ia.shared) out[IA_SYNC_KEY] = S.ia.shared;
+    try {
+      const c = await DB.get('fx_cache');
+      if (c && c.data && S.ds && c.main === C.mainCurrency(S.ds)) {
+        const used = currenciesInUse(S.ds).map(x => x.toLowerCase()), data = {};
+        used.forEach(k => { if (c.data[k] > 0) data[k] = c.data[k]; });
+        if (Object.keys(data).length) out[FX_SYNC_KEY] = { main: c.main, date: c.date, data };
+      }
+    } catch (e) { /* sem cotação */ }
+    return out;
+  }
+  // Cotação vinda da nuvem mais nova que a deste aparelho: passa a valer aqui (todos usam a mesma tabela).
+  async function adoptFx(v, ds) {
+    ds = ds || S.ds;
+    if (!v || !v.data || !ds || v.main !== C.mainCurrency(ds)) return false;
+    let c = null; try { c = await DB.get('fx_cache'); } catch (e) { c = null; }
+    if (c && c.main === v.main && c.date >= v.date) return false;
+    const merged = Object.assign({}, (c && c.main === v.main && c.data) || {}, v.data);
+    await DB.set('fx_cache', { main: v.main, date: v.date, data: merged, fetched_at: (c && c.fetched_at) || 0, source: 'nuvem do cofre' });
+    C.setAutoRates(v.main, v.date, merged); return true;
+  }
+  // Código dos dados: igual em dois aparelhos = dados idênticos (independe da ordem das listas).
+  async function dataCode(ds) {
+    const { h } = await Sync.hashes(ds || {});
+    const all = Object.keys(h).sort().map(k => k + '=' + h[k]).join('|');
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(all));
+    const hex = Array.from(new Uint8Array(buf).slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    return hex.slice(0, 4) + '-' + hex.slice(4);
+  }
+  /* Conferência completa com a nuvem: envia o que falta, baixa TODOS os registros e compara.
+     A nuvem é a fonte da verdade: se este aparelho ficou diferente, passa a ter exatamente os dados da nuvem
+     (com cópia automática do que havia antes). */
+  let syVerifying = null;
+  function syVerify(manual) {
+    if (syVerifying) return syVerifying;
+    syVerifying = (async () => {
+      if (!syReady()) return null;
+      if (manual) toast('Conferindo com a nuvem…', null, null, 60000);
+      try {
+        await syRun(false);
+        if (!syReady()) return null;
+        const st = SY.state, V = st.vault_id;
+        const got = await syFetch(V, 0);
+        const server = {};
+        for (const x of got.remote) Sync.apply(server, x.payload);
+        const fxSrv = server[FX_SYNC_KEY];
+        [IA_SYNC_KEY, FX_SYNC_KEY].forEach(k => delete server[k]);
+        if (fxSrv) await adoptFx(fxSrv, Object.keys(server).length ? server : S.ds);
+        const local = C.clone(S.ds || {});
+        const [hs, hl] = [(await Sync.hashes(server)).h, (await Sync.hashes(local)).h];
+        const keys = new Set(Object.keys(hs).concat(Object.keys(hl)));
+        let onlyServer = 0, onlyLocal = 0, differ = 0;
+        keys.forEach(k => { if (!(k in hl)) onlyServer++; else if (!(k in hs)) onlyLocal++; else if (hs[k] !== hl[k]) differ++; });
+        const total = onlyServer + onlyLocal + differ;
+        if (total && Object.keys(server).length) {
+          const backup = S.ds ? makeBackup(S.ds, 'Antes de igualar com a nuvem') : null;
+          await DB.saveWithBackup(backup, server, S.meta);
+          S.ds = server;
+          const nb = (await Sync.hashes(Object.assign({}, server, await sideRecords()))).h;
+          Object.assign(st, { base: nb, cursor: got.cursor });
+        }
+        const code = await dataCode(S.ds);
+        Object.assign(st, { verified_at: nowIso(), verified_code: code, verified_fixed: total, last_error: null });
+        await sySave();
+        document.querySelectorAll('.toast').forEach(t => t.remove());
+        if (total && Object.keys(server).length) { render(); toast(`Este aparelho estava diferente da nuvem (${total} item(ns)). Agora está igual. Uma cópia do anterior ficou em Backup.`, null, null, 8000); }
+        else if (manual) toast('Tudo certo: este aparelho está igual à nuvem · código ' + code);
+        if (S.page === 'sync') render();
+        return { total, code };
+      } catch (e) {
+        document.querySelectorAll('.toast').forEach(t => t.remove());
+        if (manual) showError('Conferência', esc(e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message)));
+        return null;
+      }
+    })().finally(() => { syVerifying = null; });
+    return syVerifying;
+  }
   function syRun(manual) {
     if (syRunning) return syRunning;
     syRunning = (async () => {
@@ -5878,27 +6082,16 @@ REGRAS
           if (reqs.length && reqs.length !== st.requests) toast(`${reqs.length} pessoa(s) pedindo para entrar no cofre`, 'Ver', () => go('mais', 'sync'), 6000);
           st.requests = reqs.length;
         }
-        const signOf = {};
-        (await rest('profiles?select=user_id,sign_public_key')).forEach(p => { signOf[p.user_id] = p.sign_public_key; });
         // 1) baixar o que mudou desde a última vez
-        const remote = []; let cursor = st.cursor || 0, bad = 0;
-        for (;;) {
-          const rows = await rest(`records?select=rid,ciphertext,iv,key_version,sig,deleted,rev,updated_by&vault_id=eq.${V}&rev=gt.${cursor}&order=rev.asc&limit=500`);
-          for (const r of rows) {
-            cursor = Math.max(cursor, r.rev);
-            const ok = signOf[r.updated_by] && await Sigilo.verifyRecord(signOf[r.updated_by], V, r.rid, r.key_version, r.iv, r.ciphertext, r.deleted, r.sig);
-            if (!ok) { bad++; continue; }
-            let payload; try { payload = await Sigilo.openRecord(SY.keys.data, V, r.rid, r.key_version, r); } catch (e) { bad++; continue; }
-            if (!payload || !payload.key || await Sigilo.rid(SY.keys.rid, payload.key) !== r.rid || !!payload.deleted !== !!r.deleted) { bad++; continue; }
-            remote.push({ payload, hash: payload.deleted ? undefined : await Sync.hashOf(payload) });
-          }
-          if (rows.length < 500) break;
-        }
+        const got = await syFetch(V, st.cursor || 0); const remote = got.remote; let cursor = got.cursor; const bad = got.bad;
         // 2) juntar com o que está neste aparelho
         const cur = S.ds;
         await iaLoad();
         const iaBefore = JSON.stringify(S.ia.shared || null);
-        const withIa = Object.assign({}, cur || {}); if (S.ia.shared) withIa[IA_SYNC_KEY] = S.ia.shared; // chave da IA da família (fica fora de S.ds)
+        // Cotação: se a da nuvem for mais nova, passa a valer aqui antes de juntar (evita mandar a antiga de volta).
+        const fxRemote = remote.filter(x => x.payload.key === '@' + FX_SYNC_KEY && !x.payload.deleted).pop();
+        const fxChanged = fxRemote ? await adoptFx(fxRemote.payload.value) : false;
+        const withIa = Object.assign({}, cur || {}, await sideRecords()); // chave da IA e cotação (ficam fora de S.ds)
         const m = await Sync.merge(withIa, st.base || {}, remote);
         // 3) enviar o que mudou aqui (quem é "só vê" não envia)
         if (S.ds !== cur) { syLater(1500); return; } // você editou durante a sincronização: refaz em seguida
@@ -5912,11 +6105,13 @@ REGRAS
         for (let i = 0; i < rows.length; i += 200) await rest('records?on_conflict=vault_id,rid', { method: 'POST', body: rows.slice(i, i + 200), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
         for (const u of p.ups) m.base[u.payload.key] = u.hash;
         for (const d of p.dels) delete m.base[d.payload.key];
-        const iaNew = m.ds[IA_SYNC_KEY] || null; delete m.ds[IA_SYNC_KEY];
+        const fxNew = m.ds[FX_SYNC_KEY]; const iaNew = m.ds[IA_SYNC_KEY] || null; delete m.ds[IA_SYNC_KEY]; delete m.ds[FX_SYNC_KEY];
+        const fxAfter = fxNew ? await adoptFx(fxNew, m.ds) : false; // aparelho que acabou de entrar (antes não tinha dados)
         const iaChanged = JSON.stringify(iaNew) !== iaBefore;
         if (iaChanged && JSON.stringify(S.ia.shared || null) === iaBefore) { S.ia.shared = iaNew; await iaSave(); }
-        m.appliedList = m.appliedList.filter(x => x.key !== '@' + IA_SYNC_KEY); m.applied = m.appliedList.length;
-        m.conflicts = m.conflicts.filter(x => x.key !== '@' + IA_SYNC_KEY);
+        const side = x => x.key === '@' + IA_SYNC_KEY || x.key === '@' + FX_SYNC_KEY;
+        m.appliedList = m.appliedList.filter(x => !side(x)); m.applied = m.appliedList.length;
+        m.conflicts = m.conflicts.filter(x => !side(x));
         // 4) gravar neste aparelho o que veio de fora
         if (m.applied) {
           let fin = m.ds;
@@ -5928,7 +6123,7 @@ REGRAS
         Object.assign(st, { base: m.base, cursor, last_sync_at: nowIso(), last_error: null, bad_records: bad, last_sent: rows.length, last_received: m.applied });
         if (m.conflicts.length) st.conflicts = (st.conflicts || []).concat(m.conflicts).slice(-50);
         await sySave();
-        if (m.applied || S.page === 'sync' || (iaChanged && S.page === 'leitor')) render();
+        if (m.applied || fxChanged || fxAfter || S.page === 'sync' || (iaChanged && S.page === 'leitor')) render();
         if (manual) { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(`Sincronizado · ${m.applied} recebido(s), ${rows.length} enviado(s)`); }
         else if (m.applied) toast(`${m.applied} alteração(ões) recebida(s) de outro aparelho`);
       } catch (e) {
@@ -5993,7 +6188,9 @@ REGRAS
         <div class="small" style="margin-top:8px">Última sincronização: <b>${st.last_sync_at ? fdatetime(st.last_sync_at) : 'ainda não'}</b>${st.last_sync_at ? ` · ${st.last_received || 0} recebido(s), ${st.last_sent || 0} enviado(s)` : ''}</div>
         ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
         ${st.bad_records ? `<div class="notice danger" style="margin:12px 0 0">${ic('alert')}<div class="ntext"><b>${st.bad_records} registro(s) recusado(s)</b>: assinatura ou conteúdo não confere. Eles não foram aplicados. Se isso se repetir, avise: pode ser falha ou adulteração no servidor.</div></div>` : ''}
-        <button class="btn" data-act="sy-now" style="margin-top:12px">${ic('db')} Sincronizar agora</button></div>`;
+        <div class="small" style="margin-top:8px">Código dos dados: <b style="font-family:ui-monospace,monospace;letter-spacing:.04em">${esc(st.verified_code || '—')}</b>${st.verified_at ? ` · conferido com a nuvem em ${fdatetime(st.verified_at)}` : ''}</div>
+        <p class="tiny muted" style="margin:4px 0 0">Se o código for igual no celular e no computador, os dados são idênticos. Os totais em outras moedas usam a mesma cotação, que também vem pela nuvem.</p>
+        <div class="btn-row" style="margin-top:12px"><button class="btn" data-act="sy-now">${ic('db')} Sincronizar agora</button><button class="btn secondary" data-act="sy-verify">${ic('check')} Conferir com a nuvem</button></div></div>`;
     if (st.pending) h += pendingCard(st.pending);
     if (S.syInvited) h += `<div class="notice ok">${ic('check')}<div class="ntext"><b>Você abriu um convite</b> para o cofre de outra pessoa. Enquanto o dono não aprovar, você continua sincronizando o seu.<br><button class="btn" data-act="sy-accept" style="margin-top:10px">Aceitar convite</button></div></div>`;
     h += `<div class="section-title"><span>Pessoas com acesso</span></div><div id="sy-people" class="card"><div class="muted small">Carregando…</div></div>`;
@@ -6142,6 +6339,7 @@ REGRAS
       }
       render();
       await syRun(true);
+      await syVerify(false);
       if (S.afterLogin === 'home') { S.afterLogin = null; go('inicio'); }
       if (S.afterLogin === 'import') {
         S.afterLogin = null; go('inicio');
@@ -6209,7 +6407,7 @@ REGRAS
       }
       S.fxError = navigator.onLine === false || (lastErr && lastErr.name === 'TypeError') ? 'sem conexão com o serviço de cotação' : 'o serviço de cotação respondeu com erro';
       return false;
-    })().then(changed => { if (changed || S.page === 'moedas') render(); return changed; }).finally(() => { fxBusy = null; });
+    })().then(changed => { if (changed || S.page === 'moedas') render(); if (changed && syReady()) syLater(3000); return changed; }).finally(() => { fxBusy = null; });
     return fxBusy;
   }
   function fmtRate(v, cur) {
@@ -6656,7 +6854,7 @@ REGRAS
       toast('Enviando o que falta para a nuvem…');
       try { await syRun(false); } catch (e) { /* conferido abaixo */ }
       document.querySelectorAll('.toast').forEach(t => t.remove());
-      try { const withIa = Object.assign({}, S.ds || {}); if (S.ia && S.ia.shared) withIa[IA_SYNC_KEY] = S.ia.shared; const p = await Sync.plan(withIa, (SY.state && SY.state.base) || {}); pend = p.ups.length + p.dels.length; } catch (e) { pend = 1; }
+      try { const withIa = Object.assign({}, S.ds || {}, await sideRecords()); const p = await Sync.plan(withIa, (SY.state && SY.state.base) || {}); pend = p.ups.filter(u => u.payload.key !== '@' + FX_SYNC_KEY).length + p.dels.length; } catch (e) { pend = 1; }
     }
     if (att) {
       const zip = await confirmDialog({ title: 'Guardar os comprovantes antes?', text: `Você tem <b>${att} comprovante(s)</b> (fotos e PDFs) guardados <b>só neste aparelho</b>: eles não vão para a nuvem. Ao sair, serão apagados daqui.<br><br>Quer exportar um ZIP com eles antes?`, ok: 'Exportar ZIP antes', cancel: 'Continuar sem exportar' });
@@ -6678,9 +6876,14 @@ REGRAS
       <div id="chat">`;
     const groups = Nlp.suggestions(S.ds, todayStr());
     const chips = gs => gs.map(g => `<div class="tiny muted" style="margin:10px 2px 6px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">${esc(g.title)}</div><div class="chips ask-chips" style="flex-wrap:wrap">${g.items.map(q => `<button class="chip" data-act="ask-suggest" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`).join('');
-    if (!S.chat.length) h += `<div class="bubble bot">Oi! Toque numa pergunta ou escreva do seu jeito:</div>` + chips(groups);
+    const ajuda = `<div class="card" style="margin-top:4px"><div class="lbl">Como usar</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
+        <li><b>Perguntar</b> sobre o que você cadastrou: saldo de uma conta, quanto gastou no mês ou numa categoria, o que vence, como está o semáforo.</li>
+        <li><b>Lançar</b> escrevendo do seu jeito: o valor, o que foi e a conta (ex.: “gastei 30 de padaria no banco X”). O app sempre pede confirmação.</li>
+        <li><b>Pedir documentos</b>: extrato, relatório do mês em PDF ou planilha.</li></ul>
+        <p class="tiny muted" style="margin:8px 0 0">As sugestões aparecem aqui conforme você cadastra contas e lançamentos: elas usam só os seus dados.</p></div>`;
+    if (!S.chat.length) h += groups.length ? `<div class="bubble bot">Oi! Toque numa pergunta ou escreva do seu jeito:</div>` + chips(groups) : ajuda;
     h += S.chat.map(m => `<div class="bubble ${m.role}">${m.html}</div>`).join('');
-    if (S.chat.length) h += `<details class="card fold" style="margin-top:12px"><summary class="small"><b>Mais perguntas</b></summary>${chips(groups)}</details>`;
+    if (S.chat.length) h += `<details class="card fold" style="margin-top:12px"><summary class="small"><b>${groups.length ? 'Mais perguntas' : 'Ajuda'}</b></summary>${groups.length ? chips(groups) : ajuda}</details>`;
     h += `</div><div style="height:90px"></div>`;
     return h;
   }
@@ -6957,6 +7160,7 @@ REGRAS
       catch (e) { document.querySelectorAll('.toast').forEach(t => t.remove()); err(e.friendly ? e.message : 'Erro inesperado: ' + e.message); }
     },
     'sy-now': () => syRun(true),
+    'sy-verify': () => syVerify(true),
     'sy-invite': () => syInvite(),
     'sy-approve': el => syApprove(el.dataset.id),
     'sy-refuse': el => syInviteStatus(el.dataset.id, 'revoked', 'Pedido recusado'),
@@ -7138,7 +7342,7 @@ REGRAS
     await iaLoad(); // chave da IA do leitor de comprovantes (só deste aparelho)
     await handleLinkHash();
     render();
-    if (syReady()) syRun(false);
+    if (syReady()) { const va = SY.state.verified_at; if (!va || Date.now() - Date.parse(va) > 6 * 3600e3) syVerify(false); else syRun(false); }
     fxRefresh(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
     await storageInfo();
