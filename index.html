@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XAB6NpUqP309gXzSDjvdPBIYger9Zckemgw9s6w5VCg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-yOBLeXgdmiEBz+nb64rZ3zCob8tGgyW8tuyf1izh+HE='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -2928,7 +2928,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       <div class="sheet-body"></div>${o.foot !== false ? '<div class="sheet-foot"></div>' : ''}</div>`;
     const sheet = {
       el: w, body: w.querySelector('.sheet-body'), foot: w.querySelector('.sheet-foot'),
-      close() { w.remove(); S.sheets = S.sheets.filter(s => s !== sheet); if (o.onClose) o.onClose(); }
+      close() { w.remove(); S.sheets = S.sheets.filter(s => s !== sheet); if (o.onClose) o.onClose(); if (swPending) setTimeout(() => { if (swPending) swApply(); }, 400); }
     };
     w.addEventListener('click', e => {
       if (e.target === w && !o.sticky) sheet.close();
@@ -3953,7 +3953,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       <div class="card"><div class="lbl" style="color:var(--danger)">Zona de perigo</div><p class="small">Apaga todos os dados, cópias automáticas e comprovantes deste aparelho. Exporte um backup antes.</p><button class="btn danger" data-act="wipe">${ic('trash')} Apagar tudo deste aparelho</button></div>`;
   }
   function pageSobre() {
-    return backBar('Mais', 'mais') + `<h1 class="page-title">Sobre</h1>
+    const h = backBar('Mais', 'mais') + `<h1 class="page-title">Sobre</h1>
       <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
       <div class="card"><div class="lbl">Como o app funciona</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:8px">
         <li>O app é um <b>cofre de dados</b>: guarda, mostra, importa e exporta. Quem analisa e planeja é você com o ChatGPT.</li>
@@ -3964,8 +3964,13 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       <div class="card"><div class="lbl">Fluxo com o ChatGPT</div><ol class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
         <li>Mais → Backup → <b>Exportar backup para o ChatGPT</b> → Salvar em Arquivos.</li><li>Anexe o arquivo na conversa com o ChatGPT e informe o que aconteceu.</li>
         <li>Peça o <b>JSON completo atualizado</b>, preservando IDs (o arquivo já leva instruções para ele em “format_guide”).</li>
-        <li>Salve o arquivo devolvido em Arquivos → aqui, <b>Importar backup</b> → confira as diferenças → Aplicar.</li><li>Exporte de novo e guarde duas cópias.</li></ol></div>
-      <p class="tiny muted" style="text-align:center">Cofre Financeiro Familiar · versão ${APP_VERSION} · formato de dados ${C.APP_SCHEMA}</p>`;
+        <li>Copie a resposta e toque em <b>Colar texto do ChatGPT</b> (ou salve o arquivo e use <b>Importar arquivo</b>) → confira as diferenças → Aplicar.</li><li>Exporte de novo e guarde duas cópias.</li></ol></div>
+      <div class="card"><div class="lbl">Versão do app</div><div id="app-version" class="small" style="margin:4px 0 10px">versão ${APP_VERSION}</div>
+        <button class="btn secondary" data-act="sw-check">Procurar atualização</button>
+        <p class="help" style="margin-top:10px">O app procura versões novas sozinho ao abrir, ao voltar para ele e a cada 30 minutos, e se atualiza quando nenhuma janela estiver aberta.</p></div>
+      <p class="tiny muted" style="text-align:center">Cofre Financeiro Familiar · formato de dados ${C.APP_SCHEMA}</p>`;
+    setTimeout(async () => { const v = await swVersion(); const el = document.getElementById('app-version'); if (el && v) el.textContent = `versão ${APP_VERSION} · compilação ${v.replace('cofre-', '')}`; }, 0);
+    return h;
   }
   function openRaw(key, id) {
     const v = S.ds[key];
@@ -5582,6 +5587,14 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'fx-unfix': el => unfixRate(el.dataset.cur),
     'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
+    'sw-check': async () => {
+      if (!swReg) { toast('Atualização automática indisponível neste navegador'); return; }
+      if (!navigator.onLine) { toast('Sem internet: tente de novo quando conectar'); return; }
+      toast('Procurando atualização…');
+      const antes = await swVersion();
+      await swCheck(true);
+      setTimeout(async () => { if (!swReloading && !swPending) { const v = await swVersion(); toast(v && v === antes ? 'Você já está na versão mais recente' : 'Atualizando…'); } }, 2500);
+    },
     'gh-push': () => ghPush(),
     'gh-pull': () => ghPull(),
     'gh-disconnect': () => ghDisconnect(),
@@ -5666,6 +5679,52 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
   }
   window.addEventListener('hashchange', async () => { if (/access_token=|error=|convite=/.test(location.hash)) { await handleLinkHash(); render(); } });
 
+  // ---------- atualização do app ----------
+  // Procura versão nova ao abrir, ao voltar para o app e a cada 30 min. A versão nova instala sozinha
+  // e a página recarrega num momento seguro: sem janela aberta, sem campo em edição e sem interromper o PIN.
+  const SW_CHECK_MS = 10 * 60e3;
+  let swReg = null, swPending = false, swReloading = false;
+  function swSafe() {
+    const a = document.activeElement;
+    const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+    return !S.sheets.length && !typing && (!S.meta.pin || S.locked || !S.ds);
+  }
+  function swApply() {
+    if (swReloading) return;
+    if (!swSafe()) { swPending = true; return; }
+    swReloading = true;
+    try { sessionStorage.setItem('cofre-updated', '1'); } catch (e) { /* sem armazenamento */ }
+    location.reload();
+  }
+  function swCheck(force) {
+    if (!swReg || !navigator.onLine) return Promise.resolve();
+    if (!force && Date.now() - (S.swLastCheck || 0) < SW_CHECK_MS) return Promise.resolve();
+    S.swLastCheck = Date.now();
+    return swReg.update().catch(() => { /* sem internet: tenta depois */ });
+  }
+  function swVersion() {
+    return new Promise(res => {
+      const c = navigator.serviceWorker && navigator.serviceWorker.controller; if (!c) return res(null);
+      const ch = new MessageChannel(); ch.port1.onmessage = e => res(e.data); c.postMessage('version', [ch.port2]);
+      setTimeout(() => res(null), 1500);
+    });
+  }
+  function swSetup() {
+    if (!('serviceWorker' in navigator) || !(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) return;
+    // Na primeira instalação o service worker só passa a controlar a página: nada a recarregar.
+    // Nas trocas seguintes (versão nova), recarrega num momento seguro.
+    let controlled = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (controlled) swApply(); controlled = true; });
+    navigator.serviceWorker.register('sw.js').then(reg => { swReg = reg; S.swLastCheck = Date.now(); }).catch(() => { /* sem service worker: app funciona, mas não offline */ });
+    setInterval(() => { if (!document.hidden) swCheck(true); }, 30 * 60e3);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (swPending) swApply(); swCheck(false); } });
+    window.addEventListener('online', () => swCheck(false));
+    let updated = false; try { updated = sessionStorage.getItem('cofre-updated') === '1'; sessionStorage.removeItem('cofre-updated'); } catch (e) { /* ignora */ }
+    if (updated) setTimeout(() => toast('App atualizado para a versão mais recente'), 600);
+  }
+  // Uma janela fechou ou um campo perdeu o foco: se havia versão nova esperando, aplica agora.
+  document.addEventListener('focusout', () => { if (swPending) setTimeout(() => { if (swPending) swApply(); }, 400); });
+
   // ---------- inicialização ----------
   async function init() {
     try {
@@ -5684,18 +5743,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     fxRefresh(false);
     try { if (navigator.storage && navigator.storage.persist) S.persisted = await navigator.storage.persist(); } catch (e) { /* sem suporte */ }
     await storageInfo();
-    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-      let refreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => { if (window.__userUpdate && !refreshing) { refreshing = true; location.reload(); } });
-      navigator.serviceWorker.register('sw.js').then(reg => {
-        reg.addEventListener('updatefound', () => {
-          const nw = reg.installing; if (!nw) return;
-          nw.addEventListener('statechange', () => {
-            if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('Nova versão do app disponível', 'Atualizar', () => { window.__userUpdate = true; nw.postMessage('skipWaiting'); }, 15000);
-          });
-        });
-      }).catch(() => { /* sem service worker: app funciona, mas não offline */ });
-    }
+    swSetup();
   }
   window.__cofre = { S, C }; // para depuração
   init();
