@@ -15,7 +15,7 @@ export function carregar(nome) {
   const fimLinha = HTML.indexOf('\n', fecha + 1);
   const codigo = HTML.slice(ini, fimLinha);
   const modulo = { exports: {} };
-  const deps = { './core.js': () => carregar('Core') };
+  const deps = { './core.js': () => carregar('Core'), './reports.js': () => carregar('Reports'), './classify.js': () => carregar('Classify') };
   const ctx = vm.createContext({
     module: modulo, exports: modulo.exports, self: undefined,
     require: p => { if (!deps[p]) throw new Error('dependência desconhecida: ' + p); return deps[p](); },

@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-yOBLeXgdmiEBz+nb64rZ3zCob8tGgyW8tuyf1izh+HE='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-i+J7PgBw01O+HpgTRJmau3ehflGW7UnAf/KXyc5k0+M='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -285,6 +285,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 .askbar .input { flex: 1; padding: 11px 13px; }
 .askbar .btn { width: 48px; padding: 0; flex: none; }
 
+
+/* sugestões do Pergunte: quebram linha em vez de sair da tela */
+.ask-chips .chip { white-space: normal; text-align: left; max-width: 100%; line-height: 1.3; }
 
 /* ================= visual com vidro (estilo "Liquid Glass") =================
    Fundo com manchas de cor suaves; cartões, barra de abas e folhas de vidro (desfoque do navegador).
@@ -2235,8 +2238,12 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     }
     if (/\bextrato\b/.test(n)) return { intent: 'statement', period, account: parseAccount(n, ds)[0] || '' };
     if (/^(quanto|qual|quais|o que|onde|como|quando|mostre|mostra|me mostra|ver|veja|liste|lista)\b/.test(n)) {
+      if (/\b(como (esta|estou|estamos|ta|foi|vai)|resumo|balanco)\b/.test(n) && /\b(mes|semana|ano|hoje|ontem|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|financas|dinheiro|vida financeira)\b/.test(n)) return { intent: 'summary', period };
+      if (/\bpatrimonio\b|\b(tenho|temos)\b.*\b(ao todo|no total|somando tudo)\b/.test(n)) return { intent: 'networth' };
+      if (/\b(onde|com o que|com que|em que|em quais?)\b.*\b(mais )?(gastei|gastamos|gasto|gastos)\b|\bmaiores (gastos|despesas)\b|\b(gastos|despesas) por categoria\b/.test(n)) return { intent: 'topcats', period };
+      if (/\b(recebi|recebemos|entrou|entraram|ganhei|ganhamos|receitas?|entradas?)\b/.test(n) && !/\bgast/.test(n)) return { intent: 'income', period };
       if (/\b(maior|mais cara|mais caro)\b.*\b(despesa|gasto|compra)\b|\b(despesa|gasto|compra)\b.*\bmaior\b/.test(n)) return { intent: 'max', period };
-      if (/\b(vence|vencem|vencimento|vencimentos|a pagar|contas? (de|do|para))\b/.test(n) && !/\bgast/.test(n)) return { intent: 'due', period, overdue: /\bvencid/.test(n) };
+      if (/\b(vence|vencem|vencid[ao]s?|atrasad[ao]s?|vencimento|vencimentos|a pagar|contas? (de|do|para))\b/.test(n) && !/\bgast/.test(n)) return { intent: 'due', period, overdue: /\b(vencid|atrasad)/.test(n) };
       if (/\b(gastei|gastamos|gasto|gastos|gastou|despesas?|paguei|pagamos)\b/.test(n)) {
         let term = null, category = explicitCategory(n);
         const m = n.match(/\b(?:com|de|em|no|na)\s+(?:o |a |os |as )?([a-z0-9][a-z0-9 ]*?)(?=\s+(?:em|no|na|neste|nesta|este|esta|do|da|de|desde|ate|hoje|ontem|semana|mes|ano)\b|[?.!]|$)/);
@@ -2326,7 +2333,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const notes = [], lines = [];
     let txs = R.filterTx(ds, { start: p.start, end: p.end, category: q.category || '', text: q.term || '' }).filter(t => C.txType(t) === 'despesa');
     const conf = txs.filter(t => C.txStatus(t) === 'confirmado'), prev = txs.filter(t => ['pendente', 'planejado', 'estimado'].includes(C.txStatus(t)));
-    const after = C.round2(conf.reduce((s, t) => s + (C.num(t.amount) || 0), 0));
+    const sm = sumMain(conf, ds), after = sm.total;
+    if (sm.noRate.length) notes.push(...noRateNote(sm.noRate));
     let hist = 0;
     // parte histórica (antes do corte), sem sobreposição com os lançamentos
     if (q.category || !q.term) {
@@ -2352,9 +2360,78 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     return { kind: 'answer', title: `Gastos ${what} · ${p.label}`, total: money(C.round2(hist + after)), totalLabel: hist ? 'Total (histórico + lançamentos)' : 'Total confirmado', lines, notes,
       actions: [{ label: 'Ver no extrato', act: 'statement', params: { start: p.start, end: p.end, category: q.category || '', text: q.term || '', label: p.label } }, { label: 'Gerar PDF', act: 'doc', params: { doc: 'categories', format: 'pdf', start: p.start, end: p.end, label: p.label } }] };
   }
+  // Valor de um lançamento na moeda principal (null se a moeda não tem cotação).
+  const inMain = (t, ds) => C.toMain(C.num(t.amount) || 0, C.txCurrency(t, ds), ds);
+  function sumMain(txs, ds) {
+    let total = 0; const noRate = new Set();
+    for (const t of txs) { const v = inMain(t, ds); if (v === null) noRate.add(C.txCurrency(t, ds)); else total += v; }
+    return { total: C.round2(total), noRate: [...noRate] };
+  }
+  const noRateNote = (nr) => nr.length ? [`Valores em ${nr.join(', ')} ficaram de fora: falta a cotação.`] : [];
+  function txsOf(ds, p, type, status) {
+    return R.filterTx(ds, { start: p.start, end: p.end }).filter(t => C.txType(t) === type && (status ? status.includes(C.txStatus(t)) : true));
+  }
+  function networthAnswer(ds, today) {
+    const s = C.summarize(ds, today), MC = s.mainCurrency;
+    const lines = s.balances.map(b => {
+      const r = C.rateOf(ds, b.currency);
+      const sub = [b.protected ? 'reserva' : 'disponível', b.currency !== MC ? (r ? '≈ ' + money(C.round2(b.balance * r), MC) : 'sem cotação') : ''].filter(Boolean).join(' · ');
+      return { label: b.name, value: b.unknown ? 'desconhecido' : money(b.balance, b.currency), sub };
+    });
+    const notes = noRateNote(s.missingRates);
+    if (s.credit.length) notes.push('Limite de cartão não entra: não é dinheiro seu.');
+    if (s.unknownAccounts.length) notes.push(`${s.unknownAccounts.length} conta(s) sem saldo informado ficaram de fora.`);
+    return { kind: 'answer', title: 'Patrimônio total', total: money(s.totalMain, MC), totalLabel: `disponível ${money(s.freeMain, MC)} · reservas ${money(s.protectedMain, MC)}`, lines, notes };
+  }
+  function topcatsAnswer(q, ds, today) {
+    const p = q.period || R.periodRange('mes', today), MC = C.mainCurrency(ds);
+    const txs = txsOf(ds, p, 'despesa', ['confirmado']);
+    const by = {}; const noRate = new Set();
+    for (const t of txs) { const v = inMain(t, ds); if (v === null) { noRate.add(C.txCurrency(t, ds)); continue; } const g = C.categoryGroup(t.category); by[g] = (by[g] || 0) + v; }
+    const total = Object.values(by).reduce((a, b) => a + b, 0);
+    const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
+    const lines = rows.slice(0, 7).map(([g, v]) => ({ label: g, value: money(C.round2(v), MC), sub: (total ? Math.round(v / total * 100) : 0) + '% dos gastos' }));
+    const notes = noRateNote([...noRate]);
+    if (!q.period) notes.push(`Considerei ${p.label}.`);
+    if (!rows.length) return { kind: 'answer', title: `Onde você gastou · ${p.label}`, text: 'Não há despesas confirmadas nesse período.', lines: [], notes };
+    return { kind: 'answer', title: `Onde você mais gastou · ${p.label}`, total: money(C.round2(total), MC), totalLabel: `em ${rows.length} categoria(s)`, lines, notes,
+      actions: [{ label: 'Ver no extrato', act: 'statement', params: { start: p.start, end: p.end, label: p.label } }] };
+  }
+  function incomeAnswer(q, ds, today) {
+    const p = q.period || R.periodRange('mes', today), MC = C.mainCurrency(ds);
+    const conf = txsOf(ds, p, 'receita', ['confirmado']), prev = txsOf(ds, p, 'receita', ['pendente', 'planejado', 'estimado']);
+    const sc = sumMain(conf, ds), sp = sumMain(prev, ds);
+    const lines = conf.sort((a, b) => (inMain(b, ds) || 0) - (inMain(a, ds) || 0)).slice(0, 6).map(t => ({ label: t.description || 'Receita', value: money(C.num(t.amount), C.txCurrency(t, ds)), sub: fd(C.dateOnly(t.date) || today) }));
+    if (prev.length) lines.push({ label: `Previstas (${prev.length}) — não somadas`, value: money(sp.total, MC), sub: 'ainda não confirmadas', muted: true });
+    const notes = noRateNote([...new Set(sc.noRate.concat(sp.noRate))]);
+    if (!q.period) notes.push(`Considerei ${p.label}.`);
+    return { kind: 'answer', title: `Entradas · ${p.label}`, total: money(sc.total, MC), totalLabel: `${conf.length} entrada(s) confirmada(s)`, lines, notes };
+  }
+  function summaryAnswer(q, ds, today) {
+    const p = q.period || R.periodRange('mes', today), MC = C.mainCurrency(ds);
+    const inc = sumMain(txsOf(ds, p, 'receita', ['confirmado']), ds), out = sumMain(txsOf(ds, p, 'despesa', ['confirmado']), ds);
+    const saldo = C.round2(inc.total - out.total);
+    const cats = topcatsAnswer({ period: p }, ds, today);
+    const ob = R.obligationsIn(ds, p.start, p.end);
+    const openTot = C.sumObligations(ob.open, true, ds);
+    const lines = [
+      { label: 'Entrou', value: money(inc.total, MC), sub: 'receitas confirmadas' },
+      { label: 'Saiu', value: money(out.total, MC), sub: 'despesas confirmadas' },
+      { label: saldo >= 0 ? 'Sobrou' : 'Faltou', value: money(Math.abs(saldo), MC), sub: saldo >= 0 ? 'entradas menos saídas' : 'saídas maiores que as entradas' }
+    ];
+    if (cats.lines && cats.lines[0]) lines.push({ label: 'Maior gasto: ' + cats.lines[0].label, value: cats.lines[0].value, sub: cats.lines[0].sub });
+    if (ob.open.length) lines.push({ label: `Contas ainda a pagar (${ob.open.length})`, value: money(openTot, MC), sub: 'vencem neste período' });
+    return { kind: 'answer', title: `Como está ${p.kind === 'mes' ? 'o mês' : 'o período'} · ${p.label}`, total: (saldo < 0 ? '−' : '') + money(Math.abs(saldo), MC), totalLabel: saldo >= 0 ? 'resultado positivo' : 'resultado negativo', lines,
+      notes: noRateNote([...new Set(inc.noRate.concat(out.noRate))]) };
+  }
+
   function answer(q, ds, today) {
     const s = C.summarize(ds, today);
     switch (q.intent) {
+      case 'networth': return networthAnswer(ds, today);
+      case 'topcats': return topcatsAnswer(q, ds, today);
+      case 'income': return incomeAnswer(q, ds, today);
+      case 'summary': return summaryAnswer(q, ds, today);
       case 'spend': return spendAnswer(q, ds, today);
       case 'max': {
         const p = q.period || R.periodRange('mes', today);
@@ -2401,8 +2478,28 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       default: return null;
     }
   }
-  const SUGGESTIONS = ['Quanto gastei com transporte em outubro?', 'Quanto tenho disponível no Nubank?', 'Quais contas vencem em novembro?', 'Registre R$ 8 de Uber Moto no Nubank', 'Gere um PDF dos gastos de outubro', 'Gere uma imagem do resumo financeiro para Luna', 'Mostre meu extrato de outubro', 'Quanto tenho reservado para a Espanha?'];
-  const api = { parse, answer, parseAmount, parseDate, parsePeriod, parseAccount, SUGGESTIONS };
+  const SUGGESTIONS = ['Qual meu patrimônio total?', 'Como está meu mês?', 'Onde mais gastei este mês?', 'Quanto recebi este mês?', 'Quais contas vencem esta semana?', 'Mostre meu extrato deste mês', 'Gere um PDF do relatório do mês'];
+  // Sugestões montadas com os dados da pessoa (nomes das contas, mês atual, categoria em que mais gasta…).
+  function suggestions(ds, today) {
+    if (!ds || !Array.isArray(ds.accounts)) return [{ title: 'Exemplos', items: SUGGESTIONS }];
+    const accs = ds.accounts.filter(a => a && a.name);
+    const free = accs.filter(a => !/protegid|espanha|reserva/.test(C.norm(a.status)));
+    const acc = (free[0] || accs[0] || {}).name, acc2 = (free[1] || free[0] || accs[0] || {}).name;
+    const hasRes = accs.some(a => /protegid|espanha|reserva/.test(C.norm(a.status)));
+    const mes = R.periodRange('mes', today);
+    const cats = topcatsAnswer({ period: mes }, ds, today).lines || [];
+    const cat = cats[0] ? cats[0].label : 'Alimentação/Compras';
+    const prox = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1).toLocaleDateString('pt-BR', { month: 'long' });
+    const groups = [
+      { title: 'Saldos', items: ['Qual meu patrimônio total?', acc && `Quanto tenho no ${acc}?`, hasRes && 'Quanto tenho guardado nas reservas?', ds.credit_facilities && ds.credit_facilities.length && 'Quanto tenho de limite no cartão?'] },
+      { title: 'Gastos e entradas', items: ['Como está meu mês?', 'Onde mais gastei este mês?', `Quanto gastei com ${cat} este mês?`, 'Qual foi a maior despesa do mês?', 'Quanto gastei no mês passado?', 'Quanto recebi este mês?'] },
+      { title: 'Contas a pagar', items: ['Quais contas vencem esta semana?', `Quais contas vencem em ${prox}?`, 'Quais contas estão vencidas?'] },
+      { title: 'Lançar', items: [acc && `Registre R$ 25 de mercado no ${acc}`, acc2 && `Paguei R$ 120 de luz no ${acc2}`, acc && `Recebi R$ 500 no ${acc}`] },
+      { title: 'Documentos', items: ['Mostre meu extrato deste mês', 'Gere um PDF do relatório do mês', 'Gere uma planilha dos gastos do mês', 'Gere uma imagem do resumo para compartilhar'] }
+    ];
+    return groups.map(g => ({ title: g.title, items: g.items.filter(Boolean) })).filter(g => g.items.length);
+  }
+  const api = { parse, answer, parseAmount, parseDate, parsePeriod, parseAccount, SUGGESTIONS, suggestions };
   if (node) module.exports = api; else root.Nlp = api;
 })(typeof self !== 'undefined' ? self : this);
 
@@ -5307,8 +5404,11 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     let h = `<h1 class="page-title" style="margin-bottom:4px">Pergunte ao Cofre</h1>
       <p class="small muted" style="margin:0 0 14px">Funciona sem internet. Entende pedidos simples sobre os seus dados e <b>sempre pede confirmação</b> antes de alterar algo. Se não entender, ele diz.</p>
       <div id="chat">`;
-    if (!S.chat.length) h += `<div class="bubble bot">Oi! Exemplos do que posso fazer:</div><div class="chips" style="flex-wrap:wrap">${Nlp.SUGGESTIONS.map(s => `<button class="chip" data-act="ask-suggest" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>`;
+    const groups = Nlp.suggestions(S.ds, todayStr());
+    const chips = gs => gs.map(g => `<div class="tiny muted" style="margin:10px 2px 6px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">${esc(g.title)}</div><div class="chips ask-chips" style="flex-wrap:wrap">${g.items.map(q => `<button class="chip" data-act="ask-suggest" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`).join('');
+    if (!S.chat.length) h += `<div class="bubble bot">Oi! Toque numa pergunta ou escreva do seu jeito:</div>` + chips(groups);
     h += S.chat.map(m => `<div class="bubble ${m.role}">${m.html}</div>`).join('');
+    if (S.chat.length) h += `<details class="card fold" style="margin-top:12px"><summary class="small"><b>Mais perguntas</b></summary>${chips(groups)}</details>`;
     h += `</div><div style="height:90px"></div>`;
     return h;
   }
@@ -5317,7 +5417,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     if (!show) { if (bar) bar.remove(); return; }
     if (bar) return;
     bar = document.createElement('form'); bar.className = 'askbar';
-    bar.innerHTML = `<input id="ask-input" class="input" placeholder="Ex.: Registre R$ 8 de Uber Moto no Nubank" autocomplete="off" enterkeyhint="send" aria-label="Pergunta"><button class="btn" type="submit" aria-label="Enviar">${ic('send')}</button>`;
+    bar.innerHTML = `<input id="ask-input" class="input" placeholder="Pergunte ou lance: “Quanto gastei este mês?”" autocomplete="off" enterkeyhint="send" aria-label="Pergunta"><button class="btn" type="submit" aria-label="Enviar">${ic('send')}</button>`;
     bar.addEventListener('submit', e => { e.preventDefault(); const i = bar.querySelector('input'); const v = i.value.trim(); if (!v) return; i.value = ''; handleAsk(v); });
     document.body.appendChild(bar);
   }
@@ -5390,8 +5490,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     }
     const a = q.intent === 'unknown' || q.intent === 'help' || q.intent === 'empty' ? null : Nlp.answer(q, S.ds, t);
     if (a) { pushChat('bot', answerCard(a)); return; }
-    pushChat('bot', `${q.intent === 'help' ? 'Posso responder sobre gastos, saldos, vencimentos e reservas, registrar lançamentos (com sua confirmação) e gerar documentos.' : '<b>Não entendi esse pedido.</b> Prefiro perguntar a inventar uma resposta.'} Tente um destes, ou use os filtros:
-      <div class="chips" style="flex-wrap:wrap;margin-top:8px">${Nlp.SUGGESTIONS.slice(0, 6).map(s => `<button class="chip" data-act="ask-suggest" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+    pushChat('bot', `${q.intent === 'help' ? 'Posso responder sobre patrimônio, saldos, gastos por categoria, entradas, como está o mês, vencimentos e reservas, registrar lançamentos (com sua confirmação) e gerar documentos.' : '<b>Não entendi esse pedido.</b> Prefiro perguntar a inventar uma resposta.'} Tente um destes, ou use os filtros:
+      <div class="chips" style="flex-wrap:wrap;margin-top:8px">${Nlp.suggestions(S.ds, todayStr()).map(g => g.items[0]).map(s => `<button class="chip" data-act="ask-suggest" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>
       <div class="btn-row" style="margin-top:8px"><button class="btn secondary" data-act="tab" data-tab="extrato" style="padding:9px;font-size:14px">Filtrar no extrato</button><button class="btn secondary" data-act="page" data-tab="mais" data-page="docs" style="padding:9px;font-size:14px">Gerar documento</button></div>`);
   }
   async function askConfirm(pid, snap) {
