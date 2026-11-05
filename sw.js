@@ -1,14 +1,18 @@
 /* Service worker: guarda o app no aparelho para funcionar sem internet.
-   Não toca em dados financeiros (eles ficam no IndexedDB). */
-const VERSION = 'cofre-2edd58739d';
+   Não toca em dados financeiros (eles ficam no IndexedDB).
+   Versão nova: instala e assume na hora (skipWaiting); a página recarrega sozinha num momento seguro. */
+const VERSION = 'cofre-95eb45e450';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('cofre-') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
-self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipWaiting(); });
+self.addEventListener('message', e => {
+  if (e.data === 'skipWaiting') self.skipWaiting();
+  if (e.data === 'version' && e.ports && e.ports[0]) e.ports[0].postMessage(VERSION);
+});
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
