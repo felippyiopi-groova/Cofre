@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-f6jrb+EAI5IzWh3/wSGjrsm86T36oZmd9+U097c0qc0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-OvylVKXt/c9Sl6+oDhAd0oV88jzkBKDaKtp7C1jilNQ='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -367,6 +367,9 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
 .btn.wl-cta { font-size: 17px; padding: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .btn.wl-cta svg { width: 18px; height: 18px; }
 .wl-micro { text-align: center; font-size: 12.5px; color: var(--ink-2); margin: 8px 0 6px; }
+.wl-top { display: flex; justify-content: flex-end; margin: 4px 0 -8px; }
+.wl-top-in { border: 1px solid var(--glass-edge, var(--line)); background: var(--glass, var(--card)); color: var(--accent); font-weight: 700; font-size: 15px; padding: 8px 18px; border-radius: 999px; box-shadow: var(--shadow); }
+.btn.wl-login { margin-top: 8px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .wl-pts { display: grid; gap: 10px; margin: 22px 4px 0; }
 .wl-pts > div { display: flex; align-items: center; gap: 12px; font-size: 15px; color: var(--ink-2); } .wl-pts b { color: var(--ink); }
 .wl-pts i { width: 36px; height: 36px; border-radius: 11px; background: var(--accent-soft); color: var(--accent); flex: none; display: grid; place-items: center; } .wl-pts i svg { width: 19px; height: 19px; }
@@ -3695,7 +3698,10 @@ REGRAS
   }
   function viewWelcome() {
     const needsInstall = isIOS() && !isStandalone();
+    const loginBtn = `<button class="btn secondary wl-login" data-act="go-login">${ic('lock')} Já tenho conta: entrar</button>`;
     return `<div class="wl">
+    ${!syReady() ? `<div class="wl-top"><button class="wl-top-in" data-act="go-login">Entrar</button></div>` : ''}
+    ${S.loggedOut && !syReady() ? `<div class="notice ok" style="margin-top:8px">${ic('check')}<div class="ntext"><b>Você saiu da conta</b> e os dados foram apagados deste aparelho. Para voltar, toque em <b>Entrar</b>: tudo é baixado da nuvem.</div></div>${loginBtn}` : ''}
     <section class="wl-hero">
       <div class="wl-logo">${logoSvg()}</div>
       <div class="wl-eyebrow">Cofre · finanças da família, sem planilha</div>
@@ -3712,7 +3718,7 @@ REGRAS
     <button class="btn wl-cta" data-act="fresh">Começar meu Cofre ${ic('right')}</button>
     <p class="wl-micro">Leva 2 minutos · sem cadastro obrigatório · sem acesso ao seu banco</p>
     ${syReady() ? `<div class="notice ok" style="margin-top:12px">${ic('check')}<div class="ntext"><b>Conta conectada</b>${SY.state.user && SY.state.user.email ? ' (' + esc(SY.state.user.email) + ')' : ''}. Agora importe seu backup ou comece do zero: tudo vai criptografado para a sua conta.</div></div><button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>`
-      : `<button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>`}
+      : S.loggedOut ? '' : loginBtn}
     ${needsInstall ? `<div class="notice info" style="margin-top:14px">${ic('info')}<div class="ntext"><b>Dica para iPhone: instale primeiro.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b> e abra pelo ícone. Assim o Cofre vira um app, abre em tela cheia e seus dados ficam no lugar certo (os do Safari ficam separados).</div></div>` : ''}
 
     <div class="wl-pts">
@@ -6001,6 +6007,7 @@ REGRAS
     if (pw.length < 8) return err('A senha precisa ter pelo menos 8 caracteres.');
     try {
       const r = await syConnect(sign ? 'signup' : 'login', email, pw);
+      S.loggedOut = false;
       document.querySelectorAll('.toast').forEach(t => t.remove());
       if (r.needsConfirm) {
         S.syMode = 'login'; render();
@@ -6016,6 +6023,7 @@ REGRAS
       }
       render();
       await syRun(true);
+      if (S.afterLogin === 'home') { S.afterLogin = null; go('inicio'); }
       if (S.afterLogin === 'import') {
         S.afterLogin = null; go('inicio');
         toast(S.ds ? 'Sua conta já tinha dados. Para importar um backup mesmo assim: Mais → Backup e restauração.' : 'Conta pronta. Agora toque em Importar backup JSON.', null, null, 7000);
@@ -6540,7 +6548,7 @@ REGRAS
         + 'Para ninguém ver seus dados neste celular, o app <b>apaga tudo daqui</b>: dados, cópias automáticas e chave da IA.<br><br>Na nuvem continua tudo, igual para quem divide o cofre com você. Ao entrar de novo, o app baixa os dados e confere com o servidor.' });
     if (!ok) return;
     await wipeLocal();
-    toast('Você saiu. Os dados foram apagados deste aparelho e continuam na nuvem.');
+    S.loggedOut = true; render();
   }
 
   // ---------- PERGUNTE AO COFRE ----------
@@ -6849,6 +6857,7 @@ REGRAS
     'fx-unfix': el => unfixRate(el.dataset.cur),
     'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
+    'go-login': () => { S.syMode = 'login'; S.afterLogin = 'home'; go('mais', 'sync'); },
     'import-welcome': async () => {
       if (syReady()) return startImport();
       const conta = await confirmDialog({ title: 'Guardar na sua conta?', text: 'Com uma conta, seus dados ficam <b>criptografados na nuvem</b>: aparecem nos seus outros aparelhos e você pode convidar a família.<br><br>Sem conta, ficam só neste celular.', ok: 'Criar conta ou entrar', cancel: 'Só neste aparelho' });
