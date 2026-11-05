@@ -1,7 +1,7 @@
 /* Service worker: guarda o app no aparelho para funcionar sem internet.
    Não toca em dados financeiros (eles ficam no IndexedDB).
    Versão nova: instala e assume na hora (skipWaiting); a página recarrega sozinha num momento seguro. */
-const VERSION = 'cofre-6393aeebbb';
+const VERSION = 'cofre-df812246ce';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));

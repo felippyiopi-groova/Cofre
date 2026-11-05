@@ -84,3 +84,16 @@ test('gastos somam moedas diferentes convertendo (antes somava euro como real)',
   assert.equal(b.total, 'R$ 352,40');
   assert.ok(b.notes.some(n => /EUR/.test(n)));
 });
+
+test('perguntas do estado financeiro respondem pelo semáforo automático', () => {
+  const d = ds();
+  for (const q of ['Como estou financeiramente?', 'Quanto posso guardar?', 'Qual conta devo pagar primeiro?', 'O que preciso fazer para sair do vermelho?', 'Como está o semáforo?'])
+    assert.equal(Nlp.parse(q, d, HOJE).intent, 'light', q);
+  const p = Nlp.parse('Se eu guardar R$ 500, meu semáforo muda?', d, HOJE);
+  assert.equal(p.intent, 'light'); assert.equal(p.save, 500);
+  const a = Nlp.answer(p, d, HOJE);
+  assert.equal(a.title, 'Seu estado financeiro'); assert.match(a.notes[0], /Se guardar R\$\s?500,00 hoje/);
+  assert.ok(a.lines.some(l => /Pode guardar hoje/.test(l.label)));
+  // "Como está meu mês?" continua sendo o resumo do mês
+  assert.notEqual(Nlp.parse('Como está meu mês?', d, HOJE).intent, 'light');
+});
