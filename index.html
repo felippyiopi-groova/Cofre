@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-9HZpK3xoqU8kTh7m844TuBPN3PwAZNmYuFMCR57QIDg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-tjg53fSJtN8buzEDLz0SPkQ2fNFcXfmSMDSTKLT6YjU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -553,7 +553,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!isObj(a)) return;
       if (a.snapshot_balance !== null && a.snapshot_balance !== undefined && isNaN(num(a.snapshot_balance)))
         errors.push(`Conta ${idOf(a)}: saldo de corte inválido (${a.snapshot_balance}).`);
-      if (a.currency && !['BRL', 'EUR'].includes(String(a.currency).toUpperCase()))
+      if (a.currency && !isCurrencyCode(a.currency))
         warnings.push(`Conta ${idOf(a)}: moeda ${a.currency} não reconhecida.`);
       if (a.snapshot_date && !DATE_RE.test(a.snapshot_date)) warnings.push(`Conta ${idOf(a)}: data de corte com formato inesperado.`);
     });
@@ -941,6 +941,60 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       .sort((a, b) => a.month.localeCompare(b.month));
   }
 
+  // Código de moeda oficial (ISO 4217, 3 letras). Usa a lista do navegador quando existe.
+  let ISO_CUR = null;
+  function isCurrencyCode(c) {
+    const s = String(c || '').toUpperCase();
+    if (!/^[A-Z]{3}$/.test(s)) return false;
+    try { ISO_CUR = ISO_CUR || new Set(Intl.supportedValuesOf('currency')); return ISO_CUR.has(s); } catch (e) { return true; }
+  }
+
+  // ---------- leitura tolerante do JSON (respostas do ChatGPT) ----------
+  // Só entra em ação se a leitura normal falhar. Conserta FORMATAÇÃO, nunca valores:
+  // bloco ```json, texto antes/depois, comentários, vírgula sobrando e aspas curvas usadas como aspas.
+  // Resposta cortada não é "consertada": é recusada com explicação.
+  function parseLenient(text) {
+    text = String(text || '').replace(/^﻿/, '').trim();
+    try { return { data: JSON.parse(text), repairs: [] }; } catch (e) { /* tenta consertar */ }
+    const repairs = [];
+    const blocks = [...text.matchAll(/```(?:json|JSON)?\s*\n?([\s\S]*?)```/g)].map(m => m[1]);
+    if (blocks.length) { text = blocks.sort((a, b) => b.length - a.length)[0].trim(); repairs.push('texto fora do bloco de código ignorado'); }
+    // recorta do primeiro { (ou [) até o fechamento correspondente, respeitando textos entre aspas
+    const start = text.search(/[{[]/);
+    if (start < 0) throw friendlyParse('Não encontrei um JSON no texto. Peça ao ChatGPT o JSON completo atualizado.');
+    if (start > 0 && !blocks.length) repairs.push('texto antes do JSON ignorado');
+    let out = '', depth = 0, inStr = null, i = start, endedAt = -1, comments = 0, commas = 0, curly = 0;
+    const OPEN = { '"': '"', '“': '”', '”': '”' };
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (ch === '\\') { out += ch + (text[i + 1] || ''); i++; continue; }
+        if (ch === inStr) { out += '"'; inStr = null; continue; }
+        if (ch === '"' && inStr !== '"') { out += '\\"'; continue; } // aspa reta dentro de texto aberto com aspa curva
+        if (ch === '\n') { out += '\\n'; continue; }
+        out += ch; continue;
+      }
+      if (ch === '"' || ch === '“' || ch === '”') { if (ch !== '"') curly++; inStr = OPEN[ch]; out += '"'; continue; }
+      if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; comments++; out += '\n'; continue; }
+      if (ch === '/' && text[i + 1] === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; comments++; continue; }
+      if (ch === ',') { const rest = text.slice(i + 1).match(/^(\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*/)[0]; const nx = text[i + 1 + rest.length]; if (nx === '}' || nx === ']') { commas++; continue; } }
+      if (ch === '{' || ch === '[') depth++;
+      if (ch === '}' || ch === ']') { depth--; if (depth === 0) { out += ch; endedAt = i; break; } }
+      out += ch;
+    }
+    if (endedAt < 0) throw friendlyParse('A resposta veio cortada (o JSON termina no meio). Isso acontece quando o arquivo é grande. Peça ao ChatGPT: "gere o arquivo .json completo para download" e importe o arquivo.', 'cortado');
+    if (text.slice(endedAt + 1).trim() && !blocks.length) repairs.push('texto depois do JSON ignorado');
+    if (comments) repairs.push(comments + ' comentário(s) removido(s)');
+    if (commas) repairs.push(commas + ' vírgula(s) sobrando removida(s)');
+    if (curly) repairs.push('aspas curvas trocadas por aspas normais');
+    try { return { data: JSON.parse(out), repairs }; }
+    catch (e) {
+      const pos = /position (\d+)/.exec(e.message);
+      throw friendlyParse('O texto não é um JSON válido' + (pos ? ' (problema perto do caractere ' + pos[1] + ')' : '') + ' e não deu para consertar com segurança. Peça ao ChatGPT para gerar o arquivo .json de novo, completo.');
+    }
+  }
+  function friendlyParse(msg, kind) { return Object.assign(new Error(msg), { friendly: true, kind: kind || 'invalido' }); }
+
   // ---------- exportação e integridade ----------
   const FORMAT_GUIDE = [
     'Este arquivo é o banco de dados do app Cofre Financeiro Familiar. Ao devolver uma versão atualizada:',
@@ -1040,7 +1094,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
     norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
-    prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
+    parseLenient, prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
     encryptText, decryptText, isEncrypted, b64, fnv
@@ -2934,6 +2988,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
     <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
     <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
+    <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
     <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
     <p class="help" style="text-align:center;margin-top:12px">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>`;
   }
@@ -3721,8 +3776,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
            <p class="help" style="margin-top:10px">Guarda o backup num repositório privado seu, com histórico de versões e criptografia opcional.</p>`}</div>
       <div class="section-title"><span>Importar</span></div>
       <div class="card">
-        <button class="btn" data-act="import">${ic('up')} Importar backup do ChatGPT</button>
-        <p class="help" style="margin-top:10px">Antes de gravar, o app valida o arquivo, mostra o que muda (novos, alterados e conflitos) e pede confirmação. Um ponto de restauração é criado automaticamente antes de qualquer importação.</p>
+        <button class="btn" data-act="import">${ic('up')} Importar arquivo do ChatGPT</button>
+        <button class="btn secondary" data-act="import-paste">Colar texto do ChatGPT</button>
+        <p class="help" style="margin-top:10px">Aceita o arquivo .json ou o texto copiado da conversa (o app ignora o texto em volta e corrige vírgulas e aspas, sem mudar valores). Antes de gravar, o app valida o arquivo, mostra o que muda (novos, alterados e conflitos) e pede confirmação. Um ponto de restauração é criado automaticamente antes de qualquer importação.</p>
       </div>
       <div class="section-title"><span>Verificação</span></div>
       <div class="card"><button class="btn secondary" data-act="integrity">${ic('shield')} Verificar integridade dos dados</button>
@@ -3888,15 +3944,27 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       document.body.appendChild(inp); inp.click();
     });
   }
-  function parseJsonLenient(text) {
-    text = text.replace(/^﻿/, '').trim();
-    try { return JSON.parse(text); } catch (e1) {
-      const m = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (m) { try { return JSON.parse(m[1]); } catch (e2) { /* segue */ } }
-      const pos = /position (\d+)/.exec(e1.message);
-      const err = new Error('O arquivo não é um JSON válido' + (pos ? ' (problema perto do caractere ' + pos[1] + ')' : '') + '. Se veio do ChatGPT, peça para ele gerar o arquivo .json de novo, completo e sem cortes.');
-      err.friendly = true; throw err;
-    }
+  let lastRepairs = [];
+  function parseJsonLenient(text) { const r = C.parseLenient(text); lastRepairs = r.repairs; return r.data; }
+
+  // Importar colando o texto que o ChatGPT mostrou na conversa (sem precisar salvar arquivo).
+  function startPasteImport() {
+    const sh = openSheet({
+      title: 'Colar resposta do ChatGPT',
+      body: `<p class="small" style="margin-top:0">No ChatGPT, toque em <b>Copiar</b> no bloco do JSON (ou copie a resposta inteira) e cole aqui. O app encontra o JSON no meio do texto.</p>
+        <textarea class="input" id="paste-json" rows="9" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Cole aqui…" style="font-family:ui-monospace,Menlo,monospace;font-size:13px"></textarea>
+        <div id="paste-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<div class="btn-row"><button class="btn secondary" data-clip>Colar da área de transferência</button><button class="btn" data-ok>Conferir</button></div>`
+    });
+    const ta = sh.body.querySelector('#paste-json');
+    sh.foot.querySelector('[data-clip]').onclick = async () => { try { ta.value = await navigator.clipboard.readText(); } catch (e) { sh.body.querySelector('#paste-err').textContent = 'O navegador não deixou ler a área de transferência: toque e segure no campo e escolha Colar.'; } };
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const t = ta.value.trim();
+      if (!t) { sh.body.querySelector('#paste-err').textContent = 'Cole o texto primeiro.'; return; }
+      sh.close();
+      const bytes = new TextEncoder().encode(t);
+      await importFromBytes(bytes, { name: 'texto colado do ChatGPT', size: bytes.length });
+    };
   }
   async function startImport() {
     const file = await pickFile();
@@ -3929,7 +3997,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (prep.fatal) throw Object.assign(new Error(prep.fatal), { friendly: true });
       const v = C.validate(prep.data);
       const integ = await C.checkIntegrityField(prep.data);
-      showImportPreview({ file, raw: obj, prep, v, integ, zipFiles });
+      showImportPreview({ file, raw: obj, prep, v, integ, zipFiles, repairs: lastRepairs.slice() });
     } catch (e) {
       showError('Não foi possível ler o arquivo', esc(e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message)));
     }
@@ -3959,10 +4027,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     let mode = 'merge';
     const sh = openSheet({ title: 'Conferir antes de importar', full: true, sticky: true });
     function header() {
+      const rp = ctx.repairs && ctx.repairs.length ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Corrigi a formatação do texto</b> (${esc(ctx.repairs.join('; '))}). Nenhum valor foi alterado: confira as mudanças abaixo antes de aplicar.</div></div>` : '';
       const curCounts = S.ds ? countsOf(S.ds) : {};
       const fileCounts = countsOf(prep.data);
       const keys = Object.keys(fileCounts).filter(k => fileCounts[k] || curCounts[k]);
-      return `<div class="card"><div style="display:flex;gap:10px;align-items:center"><div class="ico" style="font-size:22px">📄</div><div style="min-width:0"><b style="word-break:break-all">${esc(file.name)}</b><div class="small muted">${(file.size / 1024).toFixed(1)} KB · exportado em ${fdatetime(raw.exported_at)}</div></div></div>
+      return rp + `<div class="card"><div style="display:flex;gap:10px;align-items:center"><div class="ico" style="font-size:22px">📄</div><div style="min-width:0"><b style="word-break:break-all">${esc(file.name)}</b><div class="small muted">${(file.size / 1024).toFixed(1)} KB · exportado em ${fdatetime(raw.exported_at)}</div></div></div>
         <dl class="kv" style="margin-top:12px"><dt>Formato</dt><dd>${esc(raw.schema_version || '?')}${raw.app && raw.app.name ? ' · ' + esc(raw.app.name) : ''}</dd><dt>Data de corte</dt><dd>${fdate(prep.data.snapshot_date)}</dd>${raw.source ? `<dt>Origem</dt><dd>${esc(raw.source)}</dd>` : ''}
         <dt>Integridade</dt><dd>${integ.present ? (integ.match ? '<span style="color:var(--pos)">✓ intacto desde a exportação pelo app</span>' : 'alterado depois da exportação <span class="muted">(normal se veio do ChatGPT)</span>') : '<span class="muted">sem selo (normal no arquivo inicial ou criado pelo ChatGPT)</span>'}</dd></dl>
         <details class="fold" style="margin-top:10px"><summary class="small">Quantidade de registros</summary><dl class="kv" style="margin-top:8px">${keys.map(k => `<dt>${esc(COLL_LABEL[k] || humanize(k))}</dt><dd>${fileCounts[k] || 0} no arquivo${S.ds ? ' · ' + (curCounts[k] || 0) + ' no app' : ''}</dd>`).join('')}</dl></details></div>
@@ -5394,6 +5463,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
     import: () => startImport(),
+    'import-paste': () => startPasteImport(),
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
     'gh-save': () => ghSaveConfig(),
