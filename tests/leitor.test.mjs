@@ -144,3 +144,28 @@ test('mensagens de erro em português', () => {
   assert.match(L.explainError('openai', 401, { error: { message: 'Incorrect API key' } }), /recusada/);
   assert.match(L.explainError('gemini', 400, { error: { message: 'API key not valid. Please pass a valid API key.' } }), /não é válida/);
 });
+
+test('cupom fiscal: valor a pagar, sem confundir com troco ou valor recebido', () => {
+  const t = `SUPERMERCADO BOM PRECO LTDA
+CNPJ 12.345.678/0001-90
+Qtd. total de itens 7
+Valor total R$ 152,30
+Descontos R$ 2,30
+Valor a pagar R$ 150,00
+Dinheiro 200,00
+Troco R$ 50,00
+Emissão: 04/11/2026 18:22`;
+  const c = L.parseReceipt(t, HOJE);
+  assert.equal(c.amount, 150); assert.equal(c.date, '2026-11-04');
+});
+
+test('IA: categoria só se for da lista, forma de pagamento dinheiro e regras extras no pedido', () => {
+  const cats = ['Alimentação/Compras', 'Saúde'];
+  const r = L.fromAi('{"e_comprovante":true,"tipo_documento":"cupom_fiscal","valor":150,"data":"2026-11-04","direcao":"saida","meio":"dinheiro","contraparte":"Supermercado Bom Preço","categoria":"Alimentação/Compras"}', cats);
+  assert.equal(r.category, 'Alimentação/Compras'); assert.equal(r.methodLabel, 'Dinheiro'); assert.equal(r.docLabel, 'Cupom fiscal');
+  assert.equal(L.fromAi('{"valor":10,"direcao":"saida","categoria":"Inventada"}', cats).category, undefined);
+  assert.equal(L.fromAi('{"valor":10,"direcao":"entrada","categoria":"Saúde"}', cats).category, undefined);
+  const body = JSON.parse(L.readRequest('gemini', 'k', 'm', null, 'texto', { categories: cats, rules: 'Pix para Maria é aluguel' }).init.body);
+  const txt = body.contents[0].parts[0].text;
+  assert.match(txt, /LISTA DE CATEGORIAS: Alimentação\/Compras \| Saúde/); assert.match(txt, /Pix para Maria é aluguel/); assert.match(txt, /cupom fiscal/i);
+});
