@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-48arCIUF+s/AMTQHnx2HFUsrnnY40MCICtUgVvNAIhw='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-xzXJn8K6gTfSP80zop/M5RjXg0sNFV/CuuiUmeTa9V0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -340,6 +340,53 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
 /* folhas (janelas que sobem): vidro forte */
 .sheet { background: var(--glass-strong); border: 1px solid var(--glass-edge); border-bottom: 0; }
 .sheet-foot { background: transparent; border-top-color: var(--line); }
+/* tela de boas-vindas (apresentação) */
+.wl { padding-bottom: 28px; }
+.wl-hero { text-align: center; padding: 22px 4px 6px; }
+.wl-logo { width: 72px; height: 72px; border-radius: 20px; overflow: hidden; margin: 0 auto 16px; box-shadow: 0 14px 34px rgba(6, 40, 44, .32); }
+.wl-logo svg { width: 100%; height: 100%; display: block; }
+.wl-eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 6px 12px; border-radius: 999px; }
+.wl-hero h1 { font-size: 31px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 800; margin: 14px auto 10px; max-width: 17ch; }
+.wl-hero h1 span { background: linear-gradient(90deg, var(--accent), var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.wl-sub { color: var(--ink-2); font-size: 16px; line-height: 1.5; margin: 0 auto; max-width: 36ch; }
+.wl-mock { margin: 22px 6px 22px; padding: 18px; border-radius: 24px; color: #fff; background: radial-gradient(120% 90% at 100% 0%, rgba(226, 179, 87, .35), transparent 55%), linear-gradient(145deg, #0A2E3B, #0B6E69); box-shadow: 0 24px 50px rgba(6, 40, 44, .35), inset 0 1px 0 rgba(255,255,255,.18); transform: rotate(-1.2deg); }
+.wl-mk-top { display: flex; justify-content: space-between; align-items: center; font-size: 13px; opacity: .85; }
+.wl-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; background: rgba(255,255,255,.16); padding: 3px 8px; border-radius: 999px; }
+.wl-mk-big { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; margin: 4px 0 12px; }
+.wl-mk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wl-mk-row div { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.14); border-radius: 14px; padding: 9px 11px; }
+.wl-mk-row small, .wl-mk-goal small { display: block; font-size: 11.5px; opacity: .8; }
+.wl-mk-row b { font-size: 15px; }
+.wl-mk-goal { margin-top: 10px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.14); border-radius: 14px; padding: 10px 11px; }
+.wl-mk-gl { display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; }
+.wl-mk-gl span { display: inline-flex; align-items: center; gap: 6px; } .wl-mk-gl svg { width: 15px; height: 15px; }
+.wl-mk-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.18); margin: 7px 0 6px; overflow: hidden; }
+.wl-mk-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #F6D98F, #C99A3A); }
+.wl-mk-alert { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; background: rgba(0,0,0,.18); border-radius: 12px; padding: 8px 10px; }
+.wl-mk-alert svg { width: 16px; height: 16px; flex: none; color: #F6D98F; }
+.btn.wl-cta { font-size: 17px; padding: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.wl-cta svg { width: 18px; height: 18px; }
+.wl-micro { text-align: center; font-size: 12.5px; color: var(--ink-2); margin: 8px 0 6px; }
+.wl-h2 { font-size: 21px; letter-spacing: -0.02em; line-height: 1.2; margin: 30px 2px 12px; }
+.wl-feats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wl-feat { background: var(--glass, var(--card)); border: 1px solid var(--glass-edge, var(--line)); border-radius: 18px; padding: 14px 12px; box-shadow: var(--shadow); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.wl-fi { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 10px; }
+.wl-fi svg { width: 19px; height: 19px; }
+.wl-feat b { display: block; font-size: 14.5px; margin-bottom: 4px; line-height: 1.25; }
+.wl-feat span { display: block; font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.wl-trust { margin-top: 22px; border-radius: 22px; padding: 6px 16px; background: linear-gradient(160deg, var(--accent-soft), transparent 140%); border: 1px solid var(--glass-edge, var(--line)); }
+.wl-trust > div { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; }
+.wl-trust > div + div { border-top: 1px solid var(--line); }
+.wl-trust svg { width: 22px; height: 22px; flex: none; color: var(--accent); margin-top: 1px; }
+.wl-trust p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink-2); } .wl-trust p b { color: var(--ink); }
+.wl-steps { list-style: none; counter-reset: wl; padding: 0; margin: 0 0 16px; display: grid; gap: 12px; }
+.wl-steps li { counter-increment: wl; display: grid; grid-template-columns: 34px 1fr; column-gap: 12px; align-items: start; }
+.wl-steps li::before { content: counter(wl); grid-row: span 2; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #fff; background: linear-gradient(145deg, #0A2E3B, #0B6E69); }
+.wl-steps b { font-size: 15px; } .wl-steps span { font-size: 13.5px; color: var(--ink-2); }
+.wl-more { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
+.wl-more-t { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 10px; }
+@media (max-width: 350px) { .wl-feats { grid-template-columns: 1fr; } .wl-hero h1 { font-size: 27px; } }
+@media (prefers-reduced-motion: reduce) { .wl-mock { transform: none; } }
 /* marca: tela de boas-vindas e tela de entrar */
 .brand { display: grid; justify-items: center; gap: 8px; text-align: center; margin: 18px 0 20px; }
 .brand .ic { width: 84px; height: 84px; border-radius: 22px; overflow: hidden; box-shadow: 0 12px 30px rgba(6, 40, 44, .28); }
@@ -3579,15 +3626,57 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
   }
   function viewWelcome() {
     const needsInstall = isIOS() && !isStandalone();
-    return brandBlock('Suas finanças, só suas.') + `<p class="muted" style="text-align:center;margin:-8px auto 22px;max-width:34ch">Contas, saldos e reservas da família, em qualquer moeda. Funciona sem internet.</p>`
-    + `
-    ${needsInstall ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Instale antes de importar.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra o app pelo ícone e importe lá dentro. Os dados do Safari e do app instalado ficam em lugares separados.</div></div>` : ''}
-    <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
-    <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
-    <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
-    <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
+    const feat = (i, t, d) => `<div class="wl-feat"><div class="wl-fi">${ic(i)}</div><div><b>${t}</b><span>${d}</span></div></div>`;
+    return `<div class="wl">
+    <section class="wl-hero">
+      <div class="wl-logo">${logoSvg()}</div>
+      <div class="wl-eyebrow">Cofre · finanças da família, sem planilha</div>
+      <h1>Saiba onde está <span>cada real</span>. E guarde mais todo mês.</h1>
+      <p class="wl-sub">Contas, cartões, reservas e dívidas da família num lugar só. O Cofre mostra quanto você tem de verdade, quanto ainda pode gastar e quanto falta para cada meta.</p>
+    </section>
+    <div class="wl-mock" aria-label="Exemplo da tela do app">
+      <div class="wl-mk-top"><span>Patrimônio da família</span><span class="wl-tag">exemplo</span></div>
+      <div class="wl-mk-big">R$ 24.380,00</div>
+      <div class="wl-mk-row"><div><small>Disponível</small><b>R$ 6.120,00</b></div><div><small>Reservas</small><b>R$ 18.260,00</b></div></div>
+      <div class="wl-mk-goal"><div class="wl-mk-gl"><span>${ic('target')} Viagem</span><span>62%</span></div><div class="wl-mk-bar"><i style="width:62%"></i></div><small>R$ 3.100 de R$ 5.000 · faltam 7 meses</small></div>
+      <div class="wl-mk-alert">${ic('cal')}<span>Conta de luz vence amanhã · R$ 198,40</span></div>
+    </div>
+    <button class="btn wl-cta" data-act="fresh">Começar meu Cofre ${ic('right')}</button>
+    <p class="wl-micro">Leva 2 minutos · sem cadastro obrigatório · sem acesso ao seu banco</p>
     <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
-    <p class="help" style="text-align:center;margin-top:12px">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>`;
+    ${needsInstall ? `<div class="notice info" style="margin-top:14px">${ic('info')}<div class="ntext"><b>Dica para iPhone: instale primeiro.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b> e abra pelo ícone. Assim o Cofre vira um app, abre em tela cheia e seus dados ficam no lugar certo (os do Safari ficam separados).</div></div>` : ''}
+
+    <h2 class="wl-h2">Tudo o que a família precisa para cuidar do dinheiro</h2>
+    <div class="wl-feats">
+      ${feat('scan', 'Lança em segundos', 'Responda perguntas simples ou mande a foto do comprovante: o app preenche para você.')}
+      ${feat('target', 'Metas que saem do papel', 'Separe para viagem, reserva ou carro e veja a barra encher a cada depósito.')}
+      ${feat('cal', 'Nenhuma conta esquecida', 'Contas a pagar, dívidas e parcelas com vencimento na agenda.')}
+      ${feat('bar', 'Para onde foi o dinheiro', 'Gastos por categoria, extrato e relatórios em PDF ou planilha.')}
+      ${feat('chat', 'Pergunte em português', '“Quanto gastei com mercado este mês?” A resposta aparece na hora.')}
+      ${feat('scale', 'Em qualquer moeda', 'Real, dólar, euro: cotação automática e tudo somado na sua moeda.')}
+    </div>
+
+    <div class="wl-trust">
+      <div>${ic('shield')}<p><b>Privado de verdade.</b> Seus números são criptografados no aparelho, antes de sair dele. Nem o servidor do Cofre consegue ler.</p></div>
+      <div>${ic('lock')}<p><b>Feito para dividir.</b> Convide quem divide as contas com você. Cada pessoa tem seu acesso e tudo fica sincronizado.</p></div>
+      <div>${ic('check')}<p><b>Funciona sem internet</b> e sem conectar a conta do banco. Você decide o que entra.</p></div>
+    </div>
+
+    <h2 class="wl-h2">Como começa</h2>
+    <ol class="wl-steps">
+      <li><b>Cadastre suas contas</b><span>Banco, carteira, cartão e reserva, com o saldo de hoje.</span></li>
+      <li><b>Registre o dia a dia</b><span>Um gasto, um Pix recebido, uma conta paga. Uma pergunta por vez.</span></li>
+      <li><b>Veja o quadro completo</b><span>Quanto sobra, o que vence e quanto falta para cada meta.</span></li>
+    </ol>
+    <button class="btn" data-act="fresh">${ic('plus')} Começar agora</button>
+
+    <div class="wl-more"><div class="wl-more-t">Outras formas de começar</div>
+      <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
+      <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
+      <p class="help" style="text-align:center;margin:6px 0 0">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>
+    </div>
+    <div class="notice warn" style="margin-top:16px">${ic('alert')}<div class="ntext small">${WARNING_TEXT}</div></div>
+    </div>`;
   }
   const WARNING_TEXT = 'Dados salvos neste dispositivo podem ser perdidos se o navegador limpar armazenamento, o aparelho for restaurado ou o app for removido. Faça backup externo.';
 
