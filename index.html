@@ -7,9 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Cofre">
-<meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-WXnvu71zYvZhTi5UYnR5COp9Et/gCfw8O/YmA7XXlyI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XAB6NpUqP309gXzSDjvdPBIYger9Zckemgw9s6w5VCg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -285,6 +285,74 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 .askbar .input { flex: 1; padding: 11px 13px; }
 .askbar .btn { width: 48px; padding: 0; flex: none; }
 
+
+/* ================= visual com vidro (estilo "Liquid Glass") =================
+   Fundo com manchas de cor suaves; cartões, barra de abas e folhas de vidro (desfoque do navegador).
+   Sem suporte a desfoque ou com "reduzir transparência": cartões sólidos, mesma leitura. */
+:root {
+  --bg: #E7F1EE; --glass: rgba(255, 255, 255, .64); --glass-strong: rgba(255, 255, 255, .8); --glass-field: rgba(255, 255, 255, .55);
+  --glass-edge: rgba(255, 255, 255, .85); --glass-shade: 0 8px 26px rgba(16, 60, 64, .10); --glass-hi: rgba(255, 255, 255, .55);
+  --blob1: #A6E3D6; --blob2: #F6DCA4; --blob3: #74C6B9; --card-2: rgba(255, 255, 255, .5); --line: rgba(14, 26, 34, .09);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #061015; --glass: rgba(20, 31, 37, .58); --glass-strong: rgba(17, 27, 33, .82); --glass-field: rgba(255, 255, 255, .06);
+    --glass-edge: rgba(255, 255, 255, .10); --glass-shade: 0 10px 30px rgba(0, 0, 0, .40); --glass-hi: rgba(255, 255, 255, .10);
+    --blob1: #0E5A53; --blob2: #5E4516; --blob3: #0F3644; --card-2: rgba(255, 255, 255, .06); --line: rgba(255, 255, 255, .08);
+  }
+}
+html { background: var(--bg); }
+body { background: transparent; }
+body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-events: none;
+  background: radial-gradient(38% 30% at 8% 4%, var(--blob1), transparent 72%), radial-gradient(34% 28% at 98% 38%, var(--blob2), transparent 72%),
+    radial-gradient(46% 36% at 18% 100%, var(--blob3), transparent 72%), var(--bg); }
+.card, .stat, .icon-btn, .tabbar, .hero, .sheet, .askbar .input {
+  -webkit-backdrop-filter: blur(18px) saturate(165%); backdrop-filter: blur(18px) saturate(165%); }
+.card, .stat, .icon-btn { background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shade), inset 0 1px 0 var(--glass-hi); }
+.card { border-radius: 22px; }
+.input, select.input, textarea.input { background: var(--glass-field); border-color: var(--glass-edge); }
+.row-item .ico { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+/* cartão do patrimônio: vidro com leve tom do verde do Cofre */
+.hero { background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 16%, var(--glass)), var(--glass)); color: var(--ink);
+  border: 1px solid var(--glass-edge); box-shadow: var(--glass-shade), inset 0 1px 0 var(--glass-hi); border-radius: 26px; }
+.hero::after { display: none; }
+.hero .label, .hero .foot { color: var(--ink-2); opacity: 1; }
+.hero .pill { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+.hero .pill .k { color: var(--ink-2); opacity: 1; }
+/* botões: o principal ganha brilho; os secundários são de vidro */
+.btn:not(.secondary):not(.ghost):not(.danger) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 32%, transparent), inset 0 1px 0 rgba(255, 255, 255, .35); }
+.btn.secondary { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+/* barra de abas flutuante, em pílula */
+.tabbar { left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 10px); max-width: 600px; margin: 0 auto; padding-bottom: 0;
+  border-radius: 32px; border: 1px solid var(--glass-edge); background: var(--glass-strong); box-shadow: 0 12px 34px rgba(8, 40, 44, .18), inset 0 1px 0 var(--glass-hi); }
+.tabbar nav { height: 62px; padding: 0 6px; }
+.tabbar button.on::before { content: ""; position: absolute; inset: 7px 4px; border-radius: 24px; background: color-mix(in srgb, var(--accent) 14%, transparent); z-index: -1; }
+.tabbar button { isolation: isolate; }
+#app { padding-bottom: calc(62px + env(safe-area-inset-bottom) + 40px); }
+.fab { bottom: calc(62px + env(safe-area-inset-bottom) + 24px); }
+.askbar { bottom: calc(62px + env(safe-area-inset-bottom) + 16px); background: transparent; border: 0; }
+.askbar .input { background: var(--glass-strong); }
+/* folhas (janelas que sobem): vidro forte */
+.sheet { background: var(--glass-strong); border: 1px solid var(--glass-edge); border-bottom: 0; }
+.sheet-foot { background: transparent; border-top-color: var(--line); }
+/* marca: tela de boas-vindas e tela de entrar */
+.brand { display: grid; justify-items: center; gap: 8px; text-align: center; margin: 18px 0 20px; }
+.brand .ic { width: 84px; height: 84px; border-radius: 22px; overflow: hidden; box-shadow: 0 12px 30px rgba(6, 40, 44, .28); }
+.brand .ic svg { width: 100%; height: 100%; display: block; }
+.brand .nm { font-size: 34px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05; margin-top: 6px; }
+.brand .tg { color: var(--ink-2); font-size: 15px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 16px; background: var(--glass-field); border: 1px solid var(--glass-edge); margin-bottom: 14px; }
+.seg button { border: 0; background: transparent; padding: 9px 0; border-radius: 12px; font-weight: 600; font-size: 14px; color: var(--ink-2); }
+.seg button.on { background: var(--glass-strong); color: var(--ink); box-shadow: 0 2px 8px rgba(8, 40, 44, .12), inset 0 1px 0 var(--glass-hi); }
+.trust { display: flex; gap: 8px; align-items: center; justify-content: center; font-size: 13px; color: var(--ink-2); margin: 8px 0 4px; }
+.trust svg { width: 15px; height: 15px; flex: none; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: #fff; --glass-strong: #fff; } .card, .hero, .tabbar, .sheet { background: #fff; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card, .stat, .icon-btn, .tabbar, .hero, .sheet { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--glass-strong); }
+}
 </style>
 </head>
 <body>
@@ -553,7 +621,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (!isObj(a)) return;
       if (a.snapshot_balance !== null && a.snapshot_balance !== undefined && isNaN(num(a.snapshot_balance)))
         errors.push(`Conta ${idOf(a)}: saldo de corte inválido (${a.snapshot_balance}).`);
-      if (a.currency && !['BRL', 'EUR'].includes(String(a.currency).toUpperCase()))
+      if (a.currency && !isCurrencyCode(a.currency))
         warnings.push(`Conta ${idOf(a)}: moeda ${a.currency} não reconhecida.`);
       if (a.snapshot_date && !DATE_RE.test(a.snapshot_date)) warnings.push(`Conta ${idOf(a)}: data de corte com formato inesperado.`);
     });
@@ -941,6 +1009,60 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       .sort((a, b) => a.month.localeCompare(b.month));
   }
 
+  // Código de moeda oficial (ISO 4217, 3 letras). Usa a lista do navegador quando existe.
+  let ISO_CUR = null;
+  function isCurrencyCode(c) {
+    const s = String(c || '').toUpperCase();
+    if (!/^[A-Z]{3}$/.test(s)) return false;
+    try { ISO_CUR = ISO_CUR || new Set(Intl.supportedValuesOf('currency')); return ISO_CUR.has(s); } catch (e) { return true; }
+  }
+
+  // ---------- leitura tolerante do JSON (respostas do ChatGPT) ----------
+  // Só entra em ação se a leitura normal falhar. Conserta FORMATAÇÃO, nunca valores:
+  // bloco ```json, texto antes/depois, comentários, vírgula sobrando e aspas curvas usadas como aspas.
+  // Resposta cortada não é "consertada": é recusada com explicação.
+  function parseLenient(text) {
+    text = String(text || '').replace(/^﻿/, '').trim();
+    try { return { data: JSON.parse(text), repairs: [] }; } catch (e) { /* tenta consertar */ }
+    const repairs = [];
+    const blocks = [...text.matchAll(/```(?:json|JSON)?\s*\n?([\s\S]*?)```/g)].map(m => m[1]);
+    if (blocks.length) { text = blocks.sort((a, b) => b.length - a.length)[0].trim(); repairs.push('texto fora do bloco de código ignorado'); }
+    // recorta do primeiro { (ou [) até o fechamento correspondente, respeitando textos entre aspas
+    const start = text.search(/[{[]/);
+    if (start < 0) throw friendlyParse('Não encontrei um JSON no texto. Peça ao ChatGPT o JSON completo atualizado.');
+    if (start > 0 && !blocks.length) repairs.push('texto antes do JSON ignorado');
+    let out = '', depth = 0, inStr = null, i = start, endedAt = -1, comments = 0, commas = 0, curly = 0;
+    const OPEN = { '"': '"', '“': '”', '”': '”' };
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (ch === '\\') { out += ch + (text[i + 1] || ''); i++; continue; }
+        if (ch === inStr) { out += '"'; inStr = null; continue; }
+        if (ch === '"' && inStr !== '"') { out += '\\"'; continue; } // aspa reta dentro de texto aberto com aspa curva
+        if (ch === '\n') { out += '\\n'; continue; }
+        out += ch; continue;
+      }
+      if (ch === '"' || ch === '“' || ch === '”') { if (ch !== '"') curly++; inStr = OPEN[ch]; out += '"'; continue; }
+      if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; comments++; out += '\n'; continue; }
+      if (ch === '/' && text[i + 1] === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; comments++; continue; }
+      if (ch === ',') { const rest = text.slice(i + 1).match(/^(\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*/)[0]; const nx = text[i + 1 + rest.length]; if (nx === '}' || nx === ']') { commas++; continue; } }
+      if (ch === '{' || ch === '[') depth++;
+      if (ch === '}' || ch === ']') { depth--; if (depth === 0) { out += ch; endedAt = i; break; } }
+      out += ch;
+    }
+    if (endedAt < 0) throw friendlyParse('A resposta veio cortada (o JSON termina no meio). Isso acontece quando o arquivo é grande. Peça ao ChatGPT: "gere o arquivo .json completo para download" e importe o arquivo.', 'cortado');
+    if (text.slice(endedAt + 1).trim() && !blocks.length) repairs.push('texto depois do JSON ignorado');
+    if (comments) repairs.push(comments + ' comentário(s) removido(s)');
+    if (commas) repairs.push(commas + ' vírgula(s) sobrando removida(s)');
+    if (curly) repairs.push('aspas curvas trocadas por aspas normais');
+    try { return { data: JSON.parse(out), repairs }; }
+    catch (e) {
+      const pos = /position (\d+)/.exec(e.message);
+      throw friendlyParse('O texto não é um JSON válido' + (pos ? ' (problema perto do caractere ' + pos[1] + ')' : '') + ' e não deu para consertar com segurança. Peça ao ChatGPT para gerar o arquivo .json de novo, completo.');
+    }
+  }
+  function friendlyParse(msg, kind) { return Object.assign(new Error(msg), { friendly: true, kind: kind || 'invalido' }); }
+
   // ---------- exportação e integridade ----------
   const FORMAT_GUIDE = [
     'Este arquivo é o banco de dados do app Cofre Financeiro Familiar. Ao devolver uma versão atualizada:',
@@ -1040,7 +1162,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   const api = {
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
     norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
-    prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
+    parseLenient, prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
     computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
     encryptText, decryptText, isEncrypted, b64, fnv
@@ -2652,6 +2774,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- utilidades ----------
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const I = {
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
     home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
     list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
     bill: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
@@ -2922,17 +3045,28 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- boas-vindas ----------
   function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
   function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  // Logo do Cofre (A3 · cifrão no segredo). Também é a fonte dos ícones PNG do app.
+  function logoSvg() {
+    const ticks = Array.from({ length: 12 }, (_, i) => { const a = i / 12 * Math.PI * 2; return `<line x1="${(50 + 22.5 * Math.cos(a)).toFixed(1)}" y1="${(50 + 22.5 * Math.sin(a)).toFixed(1)}" x2="${(50 + 25.5 * Math.cos(a)).toFixed(1)}" y2="${(50 + 25.5 * Math.sin(a)).toFixed(1)}"/>`; }).join('');
+    return `<svg viewBox="0 0 100 100" role="img" aria-label="Cofre"><defs><linearGradient id="lgBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A2E3B"/><stop offset="1" stop-color="#0B6E69"/></linearGradient>
+      <linearGradient id="lgGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F6D98F"/><stop offset="1" stop-color="#C99A3A"/></linearGradient></defs>
+      <rect width="100" height="100" fill="url(#lgBg)"/><rect x="22" y="20" width="56" height="60" rx="11" fill="rgba(255,255,255,.09)" stroke="rgba(255,255,255,.9)" stroke-width="4"/>
+      <rect x="17" y="33.2" width="6" height="10" rx="3" fill="rgba(255,255,255,.9)"/><rect x="17" y="57.2" width="6" height="10" rx="3" fill="rgba(255,255,255,.9)"/>
+      <circle cx="50" cy="50" r="18" fill="rgba(0,0,0,.18)" stroke="url(#lgGold)" stroke-width="4.5"/><g stroke="url(#lgGold)" stroke-width="2.6" stroke-linecap="round">${ticks}</g>
+      <text x="50" y="58.5" text-anchor="middle" font-size="25" font-weight="800" fill="url(#lgGold)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">$</text></svg>`;
+  }
+  function brandBlock(tagline) {
+    return `<div class="brand"><div class="ic">${logoSvg()}</div><div class="nm">Cofre</div><div class="tg">${esc(tagline || 'Suas finanças, só suas.')}</div></div>`;
+  }
   function viewWelcome() {
     const needsInstall = isIOS() && !isStandalone();
-    return `<div class="welcome">
-      <img class="logo" src="apple-touch-icon.png" alt="">
-      <h1>Cofre Financeiro</h1>
-      <p class="muted" style="margin:0 0 22px">Seu banco de dados financeiro familiar, guardado só neste aparelho e funcionando sem internet.</p>
-    </div>
+    return brandBlock('Suas finanças, só suas.') + `<p class="muted" style="text-align:center;margin:-8px auto 22px;max-width:34ch">Contas, saldos e reservas da família, em qualquer moeda. Funciona sem internet.</p>`
+    + `
     ${needsInstall ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Instale antes de importar.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra o app pelo ícone e importe lá dentro. Os dados do Safari e do app instalado ficam em lugares separados.</div></div>` : ''}
     <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
     <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
     <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
+    <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
     <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
     <p class="help" style="text-align:center;margin-top:12px">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>`;
   }
@@ -3646,24 +3780,48 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   }
 
   // ---------- MAIS ----------
+  // Menu Mais organizado em grupos: conta no topo, depois ferramentas, preferências, dados e sobre.
   function viewMais() {
-    const items = [
-      ['backup', 'db', 'Backup e restauração', S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')],
-      ['sync', 'db', 'Sincronização', syReady() ? 'ligada · ' + (SY.state.last_sync_at ? 'última ' + fdatetime(SY.state.last_sync_at) : 'aguardando') : 'celular e computador iguais, com criptografia'],
-      ['moedas', 'scale', 'Moedas e câmbio', 'moeda principal ' + C.mainCurrency(S.ds) + (C.summarize(S.ds).missingRates.length ? ' · <span class="badge warn">falta cotação</span>' : '')],
-      ['docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'],
-      ['relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'],
-      ['agenda', 'cal', 'Agenda', 'calendário e linha do tempo'],
-      ['planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber, regras'],
-      ['conciliacao', 'scale', 'Conferência e conciliação', 'notas, resumo de outubro, verificação'],
-      ['auditoria', 'clock', 'Histórico de alterações', (S.ds.audit_log || []).length + ' registros'],
-      ['dados', 'file', 'Todos os dados', 'tudo o que está guardado, sem filtros'],
-      ['seguranca', 'lock', 'Segurança e privacidade', S.meta.pin ? 'PIN ativado' : 'PIN desativado'],
-      ['sobre', 'info', 'Sobre e avisos', 'versão ' + APP_VERSION]
-    ];
-    return `<h1 class="page-title">Mais</h1><div class="card"><div class="rows">` + items.map(([p, i, t, s]) =>
-      `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${ic('right', 'chev')}</button>`).join('') + `</div></div>`;
+    const st = SY && SY.state, logged = !!(st && st.session && st.user), ready = syReady();
+    const sum = C.summarize(S.ds), auto = C.autoRatesState();
+    const row = (p, i, t, s, extra) => `<button class="row-item" data-act="page" data-tab="mais" data-page="${p}"><div class="ico" style="color:var(--accent)">${ic(i)}</div><div class="main"><div class="t">${t}</div><div class="s">${s}</div></div>${extra || ''}${ic('right', 'chev')}</button>`;
+    const group = (title, rows) => `<div class="section-title"><span>${title}</span></div><div class="card"><div class="rows">${rows.join('')}</div></div>`;
+    let h = `<h1 class="page-title">Mais</h1>`;
+    // ---- conta ----
+    if (logged) {
+      const ini = esc((st.user.email || '?')[0].toUpperCase());
+      const status = st.pending && !st.vault_id ? 'aguardando aprovação do convite' : st.removed && !st.vault_id ? 'acesso ao cofre compartilhado removido' : ready ? (st.last_error ? '<span style="color:var(--warn)">sincronização com problema</span>' : 'sincronizado' + (st.last_sync_at ? ' · ' + fdatetime(st.last_sync_at) : '')) : 'sessão terminou: entre de novo';
+      h += `<div class="card" style="display:flex;align-items:center;gap:12px">
+          <div aria-hidden="true" style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px;flex:none">${ini}</div>
+          <div style="flex:1;min-width:0"><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div><div class="small muted">${ready ? (st.role === 'owner' ? 'Dono do cofre' : st.role === 'editor' ? 'Pode editar' : 'Só vê') + ' · ' : ''}${status}</div></div></div>
+        <div class="btn-row" style="margin:-4px 0 14px"><button class="btn secondary" data-act="page" data-tab="mais" data-page="sync">${ic('db')} Conta e pessoas</button><button class="btn secondary" data-act="sy-logout" style="color:var(--danger)">${ic('logout')} Sair</button></div>`;
+    } else {
+      h += `<div class="card"><div style="font-weight:700">Usar em outros aparelhos e com a família</div>
+          <p class="small muted" style="margin:4px 0 12px">Crie uma conta para sincronizar o celular e o computador e convidar outra pessoa. Tudo criptografado.</p>
+          <button class="btn" data-act="page" data-tab="mais" data-page="sync">Entrar ou criar conta</button></div>`;
+    }
+    // ---- grupos ----
+    h += group('Ferramentas', [
+      row('docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'),
+      row('relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'),
+      row('agenda', 'cal', 'Agenda', 'calendário e linha do tempo'),
+      row('planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber'),
+      row('conciliacao', 'scale', 'Conferência', 'notas de conciliação e verificação')
+    ]);
+    h += group('Preferências', [
+      row('moedas', 'scale', 'Moedas e câmbio', 'principal: ' + esc(C.mainCurrency(S.ds)) + ' · ' + (sum.missingRates.length ? '<span class="badge warn">falta cotação</span>' : fxOn(S.ds) ? 'cotação automática' + (auto.date ? ' de ' + esc(fdate(auto.date)) : '') : 'cotação manual')),
+      row('seguranca', 'lock', 'Segurança e privacidade', (S.meta.pin ? 'PIN ligado' : 'PIN desligado') + ' · apagar dados do aparelho'),
+      `<button class="row-item" data-act="toggle-hide"><div class="ico" style="color:var(--accent)">${ic(S.meta.hide_values ? 'eyeOff' : 'eye')}</div><div class="main"><div class="t">Esconder valores</div><div class="s">embaça os valores na tela (útil em público)</div></div>${S.meta.hide_values ? '<span class="badge" style="flex:none">ligado</span>' : '<span class="small muted" style="flex:none">desligado</span>'}</button>`
+    ]);
+    h += group('Dados e backup', [
+      row('backup', 'db', 'Backup e restauração', (S.meta.dirty ? '<span class="badge warn">backup pendente</span>' : (S.meta.last_export_at ? 'último: ' + fdatetime(S.meta.last_export_at) : 'nenhum backup exportado')) + ' · GitHub'),
+      row('auditoria', 'clock', 'Histórico de alterações', (S.ds.audit_log || []).length + ' registros'),
+      row('dados', 'file', 'Todos os dados', 'tudo o que está guardado, sem filtros')
+    ]);
+    h += group('Sobre', [row('sobre', 'info', 'Sobre e avisos', 'como o app funciona · versão ' + APP_VERSION)]);
+    return h;
   }
+
 
   async function storageInfo() {
     try {
@@ -3696,8 +3854,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
            <p class="help" style="margin-top:10px">Guarda o backup num repositório privado seu, com histórico de versões e criptografia opcional.</p>`}</div>
       <div class="section-title"><span>Importar</span></div>
       <div class="card">
-        <button class="btn" data-act="import">${ic('up')} Importar backup do ChatGPT</button>
-        <p class="help" style="margin-top:10px">Antes de gravar, o app valida o arquivo, mostra o que muda (novos, alterados e conflitos) e pede confirmação. Um ponto de restauração é criado automaticamente antes de qualquer importação.</p>
+        <button class="btn" data-act="import">${ic('up')} Importar arquivo do ChatGPT</button>
+        <button class="btn secondary" data-act="import-paste">Colar texto do ChatGPT</button>
+        <p class="help" style="margin-top:10px">Aceita o arquivo .json ou o texto copiado da conversa (o app ignora o texto em volta e corrige vírgulas e aspas, sem mudar valores). Antes de gravar, o app valida o arquivo, mostra o que muda (novos, alterados e conflitos) e pede confirmação. Um ponto de restauração é criado automaticamente antes de qualquer importação.</p>
       </div>
       <div class="section-title"><span>Verificação</span></div>
       <div class="card"><button class="btn secondary" data-act="integrity">${ic('shield')} Verificar integridade dos dados</button>
@@ -3863,15 +4022,27 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       document.body.appendChild(inp); inp.click();
     });
   }
-  function parseJsonLenient(text) {
-    text = text.replace(/^﻿/, '').trim();
-    try { return JSON.parse(text); } catch (e1) {
-      const m = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (m) { try { return JSON.parse(m[1]); } catch (e2) { /* segue */ } }
-      const pos = /position (\d+)/.exec(e1.message);
-      const err = new Error('O arquivo não é um JSON válido' + (pos ? ' (problema perto do caractere ' + pos[1] + ')' : '') + '. Se veio do ChatGPT, peça para ele gerar o arquivo .json de novo, completo e sem cortes.');
-      err.friendly = true; throw err;
-    }
+  let lastRepairs = [];
+  function parseJsonLenient(text) { const r = C.parseLenient(text); lastRepairs = r.repairs; return r.data; }
+
+  // Importar colando o texto que o ChatGPT mostrou na conversa (sem precisar salvar arquivo).
+  function startPasteImport() {
+    const sh = openSheet({
+      title: 'Colar resposta do ChatGPT',
+      body: `<p class="small" style="margin-top:0">No ChatGPT, toque em <b>Copiar</b> no bloco do JSON (ou copie a resposta inteira) e cole aqui. O app encontra o JSON no meio do texto.</p>
+        <textarea class="input" id="paste-json" rows="9" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Cole aqui…" style="font-family:ui-monospace,Menlo,monospace;font-size:13px"></textarea>
+        <div id="paste-err" class="small" style="color:var(--danger)"></div>`,
+      footHtml: `<div class="btn-row"><button class="btn secondary" data-clip>Colar da área de transferência</button><button class="btn" data-ok>Conferir</button></div>`
+    });
+    const ta = sh.body.querySelector('#paste-json');
+    sh.foot.querySelector('[data-clip]').onclick = async () => { try { ta.value = await navigator.clipboard.readText(); } catch (e) { sh.body.querySelector('#paste-err').textContent = 'O navegador não deixou ler a área de transferência: toque e segure no campo e escolha Colar.'; } };
+    sh.foot.querySelector('[data-ok]').onclick = async () => {
+      const t = ta.value.trim();
+      if (!t) { sh.body.querySelector('#paste-err').textContent = 'Cole o texto primeiro.'; return; }
+      sh.close();
+      const bytes = new TextEncoder().encode(t);
+      await importFromBytes(bytes, { name: 'texto colado do ChatGPT', size: bytes.length });
+    };
   }
   async function startImport() {
     const file = await pickFile();
@@ -3904,7 +4075,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (prep.fatal) throw Object.assign(new Error(prep.fatal), { friendly: true });
       const v = C.validate(prep.data);
       const integ = await C.checkIntegrityField(prep.data);
-      showImportPreview({ file, raw: obj, prep, v, integ, zipFiles });
+      showImportPreview({ file, raw: obj, prep, v, integ, zipFiles, repairs: lastRepairs.slice() });
     } catch (e) {
       showError('Não foi possível ler o arquivo', esc(e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message)));
     }
@@ -3934,10 +4105,11 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     let mode = 'merge';
     const sh = openSheet({ title: 'Conferir antes de importar', full: true, sticky: true });
     function header() {
+      const rp = ctx.repairs && ctx.repairs.length ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Corrigi a formatação do texto</b> (${esc(ctx.repairs.join('; '))}). Nenhum valor foi alterado: confira as mudanças abaixo antes de aplicar.</div></div>` : '';
       const curCounts = S.ds ? countsOf(S.ds) : {};
       const fileCounts = countsOf(prep.data);
       const keys = Object.keys(fileCounts).filter(k => fileCounts[k] || curCounts[k]);
-      return `<div class="card"><div style="display:flex;gap:10px;align-items:center"><div class="ico" style="font-size:22px">📄</div><div style="min-width:0"><b style="word-break:break-all">${esc(file.name)}</b><div class="small muted">${(file.size / 1024).toFixed(1)} KB · exportado em ${fdatetime(raw.exported_at)}</div></div></div>
+      return rp + `<div class="card"><div style="display:flex;gap:10px;align-items:center"><div class="ico" style="font-size:22px">📄</div><div style="min-width:0"><b style="word-break:break-all">${esc(file.name)}</b><div class="small muted">${(file.size / 1024).toFixed(1)} KB · exportado em ${fdatetime(raw.exported_at)}</div></div></div>
         <dl class="kv" style="margin-top:12px"><dt>Formato</dt><dd>${esc(raw.schema_version || '?')}${raw.app && raw.app.name ? ' · ' + esc(raw.app.name) : ''}</dd><dt>Data de corte</dt><dd>${fdate(prep.data.snapshot_date)}</dd>${raw.source ? `<dt>Origem</dt><dd>${esc(raw.source)}</dd>` : ''}
         <dt>Integridade</dt><dd>${integ.present ? (integ.match ? '<span style="color:var(--pos)">✓ intacto desde a exportação pelo app</span>' : 'alterado depois da exportação <span class="muted">(normal se veio do ChatGPT)</span>') : '<span class="muted">sem selo (normal no arquivo inicial ou criado pelo ChatGPT)</span>'}</dd></dl>
         <details class="fold" style="margin-top:10px"><summary class="small">Quantidade de registros</summary><dl class="kv" style="margin-top:8px">${keys.map(k => `<dt>${esc(COLL_LABEL[k] || humanize(k))}</dt><dd>${fileCounts[k] || 0} no arquivo${S.ds ? ' · ' + (curCounts[k] || 0) + ' no app' : ''}</dd>`).join('')}</dl></details></div>
@@ -4291,7 +4463,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     const m = mem.find(x => x.vault_id === want) || mem.find(x => x.role === 'owner') || mem[0];
     await syActivate(m);
     document.querySelectorAll('.toast').forEach(t => t.remove());
-    return { created, pending: !!SY.state.pending, inviteError };
+    // sameVault: este aparelho já sincronizava este cofre (ex.: saiu e entrou de novo) → junta sem perguntar
+    return { created, pending: !!SY.state.pending, inviteError, sameVault: want === m.vault_id };
   }
 
   // ---------- Esqueci minha senha ----------
@@ -4369,6 +4542,9 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           toast('Seu acesso ao cofre compartilhado foi removido'); render(); return;
         }
         st.role = eu[0].role;
+        if (!st.email_ok) { // contas antigas: grava o e-mail no perfil (aparece para quem divide o cofre)
+          try { const me = (await rest('profiles?select=email&user_id=eq.' + st.user.id))[0]; if (me && !me.email) await rest('profiles?user_id=eq.' + st.user.id, { method: 'PATCH', body: { email: st.user.email }, headers: { Prefer: 'return=minimal' } }); st.email_ok = true; } catch (e) { /* tenta na próxima */ }
+        }
         if (st.role === 'owner') {
           const reqs = await rest(`vault_invites?select=id&vault_id=eq.${V}&status=eq.accepted`);
           if (reqs.length && reqs.length !== st.requests) toast(`${reqs.length} pessoa(s) pedindo para entrar no cofre`, 'Ver', () => go('mais', 'sync'), 6000);
@@ -4458,15 +4634,16 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           <div id="sy-err" class="small" style="color:var(--danger)"></div>
           <button class="btn" data-act="sy-forgot-send">Enviar link</button>
           <button class="btn ghost" data-act="sy-mode" data-mode="login">Voltar para entrar</button></div>`;
-      h += `<div class="card"><div class="lbl">${sign ? 'Criar conta' : 'Entrar'}</div>
-          <p class="small muted" style="margin:4px 0 12px">${sign ? 'Para usar o Cofre no celular e no computador, ou com outra pessoa.' : 'Use o mesmo e-mail e senha dos seus outros aparelhos.'}</p>
+      h = h.replace(/<h1 class="page-title">[\s\S]*?<\/h1>/, '') + brandBlock(sign ? 'Crie sua conta para usar em qualquer aparelho.' : 'Entre para ver seus dados em qualquer aparelho.');
+      h += `<div class="card">
+          <div class="seg" role="tablist"><button role="tab" aria-selected="${!sign}" class="${sign ? '' : 'on'}" data-act="sy-mode" data-mode="login">Entrar</button><button role="tab" aria-selected="${sign}" class="${sign ? 'on' : ''}" data-act="sy-mode" data-mode="signup">Criar conta</button></div>
           <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${email}"></div>
           ${pwField('sy-pw', 'Senha', sign ? 'new-password' : 'current-password')}
           ${sign ? '<p class="help" style="margin-top:-6px">Pelo menos 8 caracteres.</p>' : ''}
           <div id="sy-err" class="small" style="color:var(--danger)"></div>
           <button class="btn" data-act="sy-go">${sign ? 'Criar conta' : 'Entrar'}</button>
-          ${sign ? '' : '<button class="btn ghost" data-act="sy-mode" data-mode="forgot">Esqueci minha senha</button>'}
-          <button class="btn ghost" data-act="sy-mode" data-mode="${sign ? 'login' : 'signup'}">${sign ? 'Já tenho conta' : 'Criar conta'}</button></div>
+          ${sign ? '' : '<button class="btn ghost" data-act="sy-mode" data-mode="forgot">Esqueci minha senha</button>'}</div>
+        <div class="trust">${ic('lock')}<span>Criptografado no seu aparelho. Nem o servidor lê.</span></div>
         <details class="card fold"><summary class="small">Como meus dados ficam protegidos?</summary><ul class="small" style="padding-left:18px;margin:10px 0 0;display:grid;gap:6px">
           <li>Tudo é <b>embaralhado neste aparelho</b> antes de sair. O servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</li>
           <li>Sua senha não vai para o servidor: vai só uma prova derivada dela.</li>
@@ -4474,7 +4651,8 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       return h;
     }
     const conf = st.conflicts || [];
-    h += `<div class="card"><div class="lbl">Conectado</div><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div>
+    h += `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div style="min-width:0"><div class="lbl">Conectado</div><div style="font-weight:700;word-break:break-all">${esc(st.user.email)}</div></div>
+          <button class="btn secondary" data-act="sy-logout" style="width:auto;margin:0;padding:8px 14px;flex:none;color:var(--danger)">${ic('logout')} Sair</button></div>
         <div class="small muted">${st.role === 'owner' ? 'Dono do cofre' : st.role === 'editor' ? 'Pode editar' : 'Só vê'} · criptografia de ponta a ponta</div>
         <div class="small" style="margin-top:8px">Última sincronização: <b>${st.last_sync_at ? fdatetime(st.last_sync_at) : 'ainda não'}</b>${st.last_sync_at ? ` · ${st.last_received || 0} recebido(s), ${st.last_sent || 0} enviado(s)` : ''}</div>
         ${st.last_error ? `<div class="notice warn" style="margin:12px 0 0">${ic('alert')}<div class="ntext">${esc(st.last_error)}</div></div>` : ''}
@@ -4490,8 +4668,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
         <li>Sem internet, tudo continua funcionando; envia quando a conexão voltar.</li>
         <li>Comprovantes (imagens) não sincronizam, só a lista deles.</li>
         <li>Pessoas convidadas veem e (se puderem editar) alteram os mesmos dados que você.</li></ul></div>
-      <button class="btn ghost" data-act="sy-logout" style="color:var(--danger)">Sair da conta neste aparelho</button>
-      <p class="help">Sair não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
+      <p class="help">Sair da conta (botão no topo) não apaga nada: os dados ficam neste aparelho e na nuvem.</p>`;
     return h;
   }
   function pwField(id, label, autocomplete) {
@@ -4622,7 +4799,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
       if (r.pending && !syReady()) { render(); return; } // aguardando a aprovação do dono (a tela mostra o código)
       if (r.inviteError) showError('Convite', esc(r.inviteError));
       // Este aparelho já tinha dados e o cofre já existia: juntar ou usar só os da nuvem?
-      if (!r.created && S.ds && Object.keys(S.ds).length) {
+      if (!r.created && !r.sameVault && S.ds && Object.keys(S.ds).length) {
         const keep = await confirmDialog({ title: 'Este aparelho já tem dados', text: 'Sua conta já tem dados na nuvem. <b>Juntar</b> mantém os dois (itens iguais não duplicam; se o mesmo item for diferente, fica o deste aparelho e o outro vai para "Conflitos").<br><br><b>Usar só os da nuvem</b> troca os dados deste aparelho pelos da nuvem (uma cópia automática dos atuais é guardada antes).', ok: 'Juntar', cancel: 'Usar só os da nuvem' });
         if (!keep) { await DB.saveWithBackup(makeBackup(S.ds, 'Antes de trocar pelos dados da nuvem'), null, S.meta); S.ds = null; }
       }
@@ -5365,6 +5542,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
     import: () => startImport(),
+    'import-paste': () => startPasteImport(),
     export: el => doExport(el.dataset.kind),
     integrity: () => integrityCheck(),
     'gh-save': () => ghSaveConfig(),
@@ -5396,7 +5574,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
     'sy-check': () => syCheckPending(true).catch(e => showError('Sincronização', esc(e.message))),
     'sy-accept': async () => { try { await syAcceptInvite(); render(); } catch (e) { showError('Convite', esc(e.message)); render(); } },
     'sy-clear-conf': async () => { await syLoad(); if (SY.state) { SY.state.conflicts = []; await sySave(); } render(); },
-    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); render(); toast('Sincronização desligada neste aparelho'); },
+    'sy-logout': async () => { if (!(await confirmDialog({ title: 'Sair da conta neste aparelho?', text: 'Os dados continuam neste aparelho e na nuvem. Para voltar a sincronizar, entre de novo com e-mail e senha.', ok: 'Sair' }))) return; await syForget(); S.syMode = 'login'; render(); toast('Você saiu da conta. Os dados continuam neste aparelho.'); },
     'acc-edit': el => { S.sheets.slice().forEach(x => x.close()); openAccountForm(el.dataset.id); },
     'cur-main': () => changeMainCurrency(),
     'fx-now': () => { toast('Buscando cotações…'); fxRefresh(true).then(() => { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(S.fxError ? 'Não foi possível atualizar: ' + S.fxError : 'Cotações atualizadas'); }); },
