@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-OvylVKXt/c9Sl6+oDhAd0oV88jzkBKDaKtp7C1jilNQ='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-HR0uue75BO6LtlaiD7muOhcV3yWr8R+NZSmTOkkNuFc='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -1110,7 +1110,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'Para quitar uma conta a pagar: mude o "status" dela para "pago", preencha "paid_transaction_id" e crie o lançamento com "obligation_id". Não registre o mesmo pagamento duas vezes.',
     'Não apague registros: mude o status (ex.: "cancelado"). Itens excluídos no app aparecem em "deleted_records" e não devem ser recriados.',
     '"calculated_balances", "calculated_traffic_light", "integrity", "app" e "format_guide" são gerados pelo app e ignorados na importação.',
-    'Semáforo de liquidez: o app CALCULA sozinho (veja "calculated_traffic_light"); não grave "traffic_light". Para mudar o critério, ajuste "settings.traffic_light_rules": "dias" (janela de contas a pagar, padrão 30), "dias_urgente" (padrão 7) e "meses_folga_verde" (meses de gasto médio que precisam sobrar para ficar VERDE, padrão 1).',
+    'Semáforo financeiro: o app CALCULA sozinho por fluxo de caixa dia a dia (veja "calculated_traffic_light"); não grave "traffic_light". Regras em "traffic_light_policy": { "version": 1, "horizon_days": 7|15|30|60|90, "reserve_min": valor na moeda principal ou null (= 1 mês de gasto médio), "safety_margin_pct": % do gasto mensal que deve sobrar (padrão 10), "count_uncertain_income": false }. Contas a pagar não essenciais: "essential": false. Receitas incertas: "certain": false. Preserve também "cofre_ai_financial_rules", "ai_goal_templates" e "ai_interoperability" se existirem.',
     'Atualize "exported_at" com a data/hora da sua versão.'
   ];
 
@@ -1124,65 +1124,125 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     for (const k of Object.keys(ds)) if (!META_KEYS.has(k)) c[k] = ds[k];
     return stable(c);
   }
-  // ---------- semáforo de liquidez (automático) ----------
-  // Calculado só a partir dos dados: ninguém escolhe a cor, então todos os aparelhos mostram a mesma.
-  // Regras (podem ser ajustadas pelo ChatGPT em settings.traffic_light_rules):
-  //   folga = disponível em conta − contas a pagar nos próximos N dias (sem contar o que ainda vai entrar)
-  //   VERMELHO: nem com as receitas previstas do período dá para pagar tudo, ou o disponível não cobre o que vence em 7 dias
-  //   LARANJA:  só fecha se as receitas previstas entrarem
-  //   AMARELO:  fecha, mas a folga é menor que X meses de gastos (média dos últimos 3 meses)
-  //   VERDE:    fecha e sobra pelo menos X meses de gastos
-  const TL_DEFAULTS = { dias: 30, dias_urgente: 7, meses_folga_verde: 1 };
+  // ---------- semáforo financeiro (automático) ----------
+  // Calculado só a partir dos dados, de forma determinística: ninguém escolhe a cor e todos os aparelhos
+  // mostram a mesma. Regras declarativas em ds.traffic_light_policy (validadas aqui; nada do JSON é executado).
+  //   Fluxo de caixa DIA A DIA no horizonte: começa no disponível em conta (sem reservas nem crédito),
+  //   tira cada conta a pagar na data dela (vencidas contam hoje) e soma as receitas previstas na data.
+  //   SITUAÇÃO ATUAL (cor principal):
+  //     VERMELHO  falta dinheiro em algum dia (saldo projetado negativo), ou conta essencial vencida sem dinheiro para ela
+  //     AMARELO   não falta, mas: reserva abaixo do mínimo, sobra menor que a margem de segurança ou conta vencida (coberta)
+  //     VERDE     não falta em nenhum dia, reserva no mínimo e sobra acima da margem
+  //   SITUAÇÃO PROJETADA: o mesmo olhando o saldo no fim do horizonte (depois de todas as entradas e saídas).
+  //   Dados incompletos nunca viram VERDE: aparece "DADOS INSUFICIENTES".
+  const TL_DEFAULTS = { version: 1, horizon_days: 30, reserve_min: null, safety_margin_pct: 10, count_uncertain_income: false };
+  const TL_HORIZONS = [7, 15, 30, 60, 90];
   function addDaysIso(ymd, k) { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); }
-  function trafficLight(ds, today) {
-    today = today || new Date().toISOString().slice(0, 10);
-    const st = isObj(ds && ds.settings) && isObj(ds.settings.traffic_light_rules) ? ds.settings.traffic_light_rules : {};
-    const R = {}; for (const k of Object.keys(TL_DEFAULTS)) { const v = num(st[k]); R[k] = v > 0 && isFinite(v) ? v : TL_DEFAULTS[k]; }
-    const end = addDaysIso(today, Math.round(R.dias)), urgent = addDaysIso(today, Math.round(R.dias_urgente));
+  function tlPolicy(ds) {
+    const P = Object.assign({}, TL_DEFAULTS);
+    const src = isObj(ds && ds.traffic_light_policy) ? ds.traffic_light_policy : {};
+    const old = isObj(ds && ds.settings) && isObj(ds.settings.traffic_light_rules) ? ds.settings.traffic_light_rules : {}; // versão anterior
+    const h = num(src.horizon_days != null ? src.horizon_days : old.dias);
+    if (h > 0) P.horizon_days = TL_HORIZONS.reduce((a, b) => Math.abs(b - h) < Math.abs(a - h) ? b : a, 30);
+    const rm = num(src.reserve_min); if (src.reserve_min !== null && src.reserve_min !== undefined && rm >= 0 && isFinite(rm)) P.reserve_min = round2(rm);
+    const mp = num(src.safety_margin_pct); if (mp >= 0 && mp <= 100) P.safety_margin_pct = mp;
+    if (typeof src.count_uncertain_income === 'boolean') P.count_uncertain_income = src.count_uncertain_income;
+    return P;
+  }
+  const isEssential = o => !(o && (o.essential === false || /baixa|opcional|nao essencial|não essencial/.test(norm(o.priority || o.criticality || ''))));
+  const isUncertain = r => r && (r.certain === false || /incert|talvez|possivel|possível|nao confirmad|não confirmad|estimad/.test(norm(r.status || r.certainty || '')));
+  function trafficLight(ds, today, opts) {
+    today = today || new Date().toISOString().slice(0, 10); opts = opts || {};
+    ds = ds || {};
+    const P = tlPolicy(ds), H = P.horizon_days, end = addDaysIso(today, H);
     const s = summarize(ds, today), main = s.mainCurrency;
-    const free = round2(s.freeMain || 0);
-    let pay = 0, payUrgent = 0, overdue = 0, noDate = 0, noRate = 0, inc = 0;
+    const saveNow = round2(num(opts.save) || 0); // simulação "e se eu guardar": não altera os dados
+    const free = round2((s.freeMain || 0) - saveNow), reserve = round2((s.protectedMain || 0) + saveNow);
+    const ev = []; // { date, amount (+ entra / − sai), name, kind, essential, overdue }
+    let noDate = 0, noRate = 0, uncertainSkipped = 0;
     for (const o of (ds.obligations || [])) {
       if (!isObj(o) || !isObligationOpen(o)) continue;
-      const v = toMain(openAmountOf(o), currencyOf(o, ds), ds); if (v === null || isNaN(v)) { noRate++; continue; }
+      const v = toMain(openAmountOf(o), currencyOf(o, ds), ds); if (v === null || isNaN(v) || v <= 0) { if (v === null) noRate++; continue; }
       const d = dateOnly(o.due_date); if (!d) { noDate++; continue; }
-      if (d <= end) pay += v; if (d <= urgent) payUrgent += v; if (d < today) overdue++;
+      if (d > end) continue;
+      ev.push({ date: d < today ? today : d, due: d, amount: -round2(v), name: o.name || o.description || displayName(idOf(o)) || 'Conta a pagar', kind: 'conta', essential: isEssential(o), overdue: d < today });
     }
-    // Lançamentos planejados no período (ainda não mexem no saldo).
-    for (const t of (ds.transactions || [])) {
-      if (!isObj(t) || txStatus(t) === 'confirmado') continue;
-      const d = dateOnly(t.date); if (!d || d > end) continue;
+    for (const t of (ds.transactions || [])) { // lançamentos planejados (ainda não mexem no saldo)
+      if (!isObj(t) || txStatus(t) === 'confirmado' || t.obligation_id) continue;
+      const d = dateOnly(t.date); if (!d || d < today || d > end) continue;
       const v = toMain(num(t.amount) || 0, txCurrency(t, ds), ds); if (v === null) { noRate++; continue; }
-      if (txType(t) === 'despesa' && !t.obligation_id) { pay += v; if (d <= urgent) payUrgent += v; }
-      else if (txType(t) === 'receita') inc += v;
+      if (txType(t) === 'despesa') ev.push({ date: d, due: d, amount: -round2(v), name: t.description || 'Gasto planejado', kind: 'planejado', essential: true });
+      else if (txType(t) === 'receita') ev.push({ date: d, due: d, amount: round2(v), name: t.description || 'Receita planejada', kind: 'entrada' });
     }
     for (const r of (ds.income_forecasts || [])) {
       if (!isObj(r) || /recebid|cancelad|pago/.test(norm(r.status))) continue;
-      const v = toMain(amountOf(r), currencyOf(r, ds), ds); if (v === null || isNaN(v)) continue;
-      let d = dateOnly(r.date);
-      if (!d && r.expected_day && /mensal/.test(norm(r.frequency))) {
-        const day = Math.min(28, Math.max(1, Math.round(+r.expected_day))); let yy = +today.slice(0, 4), mm = +today.slice(5, 7);
-        if (day < +today.slice(8, 10)) { mm++; if (mm > 12) { mm = 1; yy++; } }
-        d = `${yy}-${String(mm).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (isUncertain(r) && !P.count_uncertain_income) { uncertainSkipped++; continue; }
+      const v = toMain(amountOf(r), currencyOf(r, ds), ds); if (v === null || isNaN(v) || v <= 0) continue;
+      const nm = r.name || r.description || displayName(idOf(r)) || 'Receita prevista';
+      let dates = [];
+      const d0 = dateOnly(r.date || r.expected_date);
+      if (d0) dates = [d0];
+      else if (r.expected_day && /mensal/.test(norm(r.frequency))) {
+        const day = Math.min(28, Math.max(1, Math.round(+r.expected_day)));
+        let yy = +today.slice(0, 4), mm = +today.slice(5, 7);
+        for (let k = 0; k < 4; k++) { const d = `${yy}-${String(mm).padStart(2, '0')}-${String(day).padStart(2, '0')}`; dates.push(d); mm++; if (mm > 12) { mm = 1; yy++; } }
       }
-      if (d && d >= today && d <= end) inc += v;
+      for (const d of dates) if (d >= today && d <= end) ev.push({ date: d, due: d, amount: round2(v), name: nm, kind: 'entrada' });
     }
-    // Gasto médio mensal: 3 meses completos antes do mês atual.
+    // Fluxo dia a dia. No mesmo dia, entra primeiro e depois sai.
+    ev.sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : (y.amount - x.amount));
+    let bal = free, minBal = free, minDate = today, firstNeg = null; const flow = [{ date: today, balance: free }];
+    for (const e of ev) {
+      bal = round2(bal + e.amount); e.after = bal;
+      if (bal < minBal) { minBal = bal; minDate = e.date; }
+      if (bal < 0 && !firstNeg) firstNeg = e;
+      const last = flow[flow.length - 1]; if (last.date === e.date) last.balance = bal; else flow.push({ date: e.date, balance: bal });
+    }
+    const endBal = bal;
+    const pays = ev.filter(e => e.amount < 0), incs = ev.filter(e => e.amount > 0);
+    const due = round2(-pays.reduce((a, e) => a + e.amount, 0)), dueEss = round2(-pays.filter(e => e.essential).reduce((a, e) => a + e.amount, 0));
+    const inc = round2(incs.reduce((a, e) => a + e.amount, 0));
+    const overdue = pays.filter(e => e.overdue), overdueEss = overdue.filter(e => e.essential);
+    const overdueEssSum = round2(-overdueEss.reduce((a, e) => a + e.amount, 0));
+    // Gasto médio mensal (3 meses completos anteriores) → reserva mínima e margem de segurança.
     const ms = monthlyExpenses(ds).filter(m => m.month < today.slice(0, 7)).slice(-3);
     const avg = ms.length ? round2(ms.reduce((a, m) => a + m.confirmed, 0) / ms.length) : 0;
-    pay = round2(pay); payUrgent = round2(payUrgent); inc = round2(inc);
-    const folga = round2(free - pay), comPrevistas = round2(folga + inc), alvo = round2(avg * R.meses_folga_verde);
-    let level, why;
-    if (comPrevistas < 0) { level = 'VERMELHO'; why = `Mesmo com o que está previsto para entrar, não dá para pagar tudo o que vence nos próximos ${R.dias} dias.`; }
-    else if (free < payUrgent) { level = 'VERMELHO'; why = `O disponível em conta não cobre o que vence nos próximos ${R.dias_urgente} dias.`; }
-    else if (folga < 0) { level = 'LARANJA'; why = `As contas dos próximos ${R.dias} dias só fecham se as receitas previstas entrarem.`; }
-    else if (avg > 0 && folga < alvo) { level = 'AMARELO'; why = `As contas fecham, mas a sobra é menor que ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gastos.`; }
-    else { level = 'VERDE'; why = avg > 0 ? `As contas fecham e sobra pelo menos ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gastos.` : `As contas dos próximos ${R.dias} dias fecham com o disponível.`; }
+    const reserveMin = P.reserve_min != null ? P.reserve_min : avg;
+    const margin = round2(avg * P.safety_margin_pct / 100);
+    // Dados suficientes?
+    const freeAccs = s.balances.filter(b => !b.protected);
     const partial = [];
+    if (!freeAccs.length) partial.push('nenhuma conta do dia a dia cadastrada');
     if (s.unknownAccounts.length) partial.push(`${s.unknownAccounts.length} conta(s) sem saldo informado`);
     if (s.missingRates.length || noRate) partial.push('valores sem cotação');
-    if (noDate) partial.push(`${noDate} conta(s) a pagar sem data`);
-    return { level, why, currency: main, today, rules: R, free, pay, payUrgent, inc, folga, comPrevistas, avgMonthly: avg, months: ms.length, overdue, partial };
+    if (noDate) partial.push(`${noDate} conta(s) a pagar sem data de vencimento`);
+    const insufficient = !freeAccs.some(b => b.balance !== null) || partial.length > 0;
+    // Motivos (do mais grave para o mais leve).
+    const reasons = [];
+    const nextInc = (after) => incs.find(e => e.date >= after) || null;
+    if (firstNeg) {
+      const gap = round2(-minBal), before = round2(firstNeg.after - firstNeg.amount), ni = nextInc(firstNeg.date);
+      reasons.push({ sev: 'VERMELHO', code: 'falta_caixa', date: firstNeg.date, name: firstNeg.name, amount: -firstNeg.amount, available: before, missing: gap, next_income: ni ? { date: ni.date, amount: ni.amount, name: ni.name } : null });
+    }
+    if (overdueEss.length && free < overdueEssSum) reasons.push({ sev: 'VERMELHO', code: 'vencida_sem_dinheiro', items: overdueEss.map(e => ({ name: e.name, amount: -e.amount, due: e.due })), amount: overdueEssSum, available: free, missing: round2(overdueEssSum - free) });
+    else if (overdue.length) reasons.push({ sev: 'AMARELO', code: 'vencida', items: overdue.map(e => ({ name: e.name, amount: -e.amount, due: e.due, essential: e.essential })), amount: round2(-overdue.reduce((a, e) => a + e.amount, 0)) });
+    if (reserveMin > 0 && reserve < reserveMin) reasons.push({ sev: 'AMARELO', code: 'reserva_baixa', reserve, reserve_min: reserveMin, missing: round2(reserveMin - reserve), auto: P.reserve_min == null });
+    if (!firstNeg && margin > 0 && minBal < margin) reasons.push({ sev: 'AMARELO', code: 'sobra_pequena', min_balance: minBal, min_date: minDate, margin });
+    const sevOf = list => list.some(r => r.sev === 'VERMELHO') ? 'VERMELHO' : list.some(r => r.sev === 'AMARELO') ? 'AMARELO' : 'VERDE';
+    let level = sevOf(reasons);
+    // Projetada: saldo no fim do horizonte (entradas e saídas já feitas).
+    const projReasons = [];
+    if (endBal < 0) projReasons.push({ sev: 'VERMELHO' });
+    if (reserveMin > 0 && reserve < reserveMin) projReasons.push({ sev: 'AMARELO' });
+    if (endBal >= 0 && margin > 0 && endBal < margin) projReasons.push({ sev: 'AMARELO' });
+    let projected = sevOf(projReasons);
+    const noBase = !freeAccs.some(b => b.balance !== null); // sem saldo do dia a dia não dá para avaliar nada
+    if (noBase || (insufficient && level === 'VERDE')) level = 'DADOS INSUFICIENTES';
+    if (noBase || (insufficient && projected === 'VERDE')) projected = 'DADOS INSUFICIENTES';
+    // Quanto dá para guardar hoje sem faltar dinheiro em nenhum dia (mantendo a margem).
+    const canSave = Math.max(0, round2(minBal - margin));
+    return { level, projected, reasons, currency: main, today, end, policy: P, free, reserve, reserveMin, margin, avgMonthly: avg, months: ms.length,
+      due, dueEssential: dueEss, inc, minBalance: minBal, minDate, endBalance: endBal, flow, events: ev, overdue: overdue.length, canSave, partial, insufficient, uncertainSkipped, simulatedSave: saveNow };
   }
 
   async function buildExport(ds, nowIso, opts) {
@@ -1197,7 +1257,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     };
     for (const k of Object.keys(ds)) if (!META_KEYS.has(k)) out[k] = clone(ds[k]);
     { const tl = trafficLight(ds, (nowIso || '').slice(0, 10));
-      out.calculated_traffic_light = { note: 'Calculado pelo app a partir dos dados (não editável). Para mudar as regras, ajuste settings.traffic_light_rules: dias, dias_urgente, meses_folga_verde.', level: tl.level, reason: tl.why, currency: tl.currency, free_in_accounts: tl.free, due_in_period: tl.pay, due_urgent: tl.payUrgent, expected_income_in_period: tl.inc, slack: tl.folga, avg_monthly_expenses: tl.avgMonthly, rules: tl.rules, partial: tl.partial }; }
+      out.calculated_traffic_light = { note: 'Calculado pelo app a partir dos dados (não editável e recalculado a cada importação). As regras ficam em "traffic_light_policy".', current: tl.level, projected: tl.projected, currency: tl.currency, horizon_days: tl.policy.horizon_days, available: tl.free, reserves: tl.reserve, reserve_min: tl.reserveMin, safety_margin: tl.margin, due_in_horizon: tl.due, due_essential: tl.dueEssential, expected_income: tl.inc, lowest_projected_balance: tl.minBalance, lowest_balance_date: tl.minDate, end_balance: tl.endBalance, can_save_now: tl.canSave, reasons: tl.reasons, incomplete_data: tl.partial }; }
     out.calculated_balances = {
       note: 'Gerado pelo app: snapshot + lançamentos confirmados posteriores ao corte. Ignorado na importação.',
       calculated_at: nowIso,
@@ -1257,7 +1317,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     APP_SCHEMA, APP_NAME, META_KEYS, CATEGORIES, FORMAT_GUIDE,
     norm, stable, clone, num, round2, dateOnly, idOf, idField, txType, txStatus, amountOf, openAmountOf, sumObligations, mainCurrency, rateOf, rateInfo, setAutoRates, autoRatesState, toMain, currencyOf, txCurrency, isObligationOpen,
     parseLenient, prepare, validate, diff, defaultDecisions, diffStats, applyMerge,
-    computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount, trafficLight, TL_DEFAULTS,
+    computeBalances, computeCredit, summarize, monthlyExpenses, txCountsForAccount, trafficLight, tlPolicy, TL_DEFAULTS, TL_HORIZONS,
     buildExport, checkIntegrityField, makeBase, changesSince, recHash, categoryGroup, displayName, sha256Hex, contentForHash,
     encryptText, decryptText, isEncrypted, b64, fnv
   };
@@ -2328,6 +2388,9 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       return { intent: 'doc', doc, format, period, account };
     }
     if (/\bextrato\b/.test(n)) return { intent: 'statement', period, account: parseAccount(n, ds)[0] || '' };
+    // Semáforo financeiro e perguntas de "como estou / quanto posso guardar / e se…"
+    if (/\bsemaforo\b|\bestado financeiro\b|\bcomo (estou|estamos|esta|ta) financeiramente\b|^como (estou|estamos)\s*\??$|\bminha situacao( financeira)?\b|\bsair do vermelho\b|\bquanto (posso|podemos|da pra|da para|consigo|consigo) (guardar|poupar|economizar|separar)\b|\bse eu (guardar|separar|poupar)\b|\b(qual|que|quais) contas? (devo |eu devo |tenho que |preciso )?pagar primeiro\b|\bse eu pagar (todas|tudo)\b/.test(n))
+      return { intent: 'light', save: /\bse eu (guardar|separar|poupar)\b/.test(n) ? ((parseAmount(n) || {}).value || null) : null, first: /primeiro/.test(n) };
     if (/^(quanto|qual|quais|o que|onde|como|quando|mostre|mostra|me mostra|ver|veja|liste|lista)\b/.test(n)) {
       if (/\b(como (esta|estou|estamos|ta|foi|vai)|resumo|balanco)\b/.test(n) && /\b(mes|semana|ano|hoje|ontem|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|financas|dinheiro|vida financeira)\b/.test(n)) return { intent: 'summary', period };
       if (/\bpatrimonio\b|\b(tenho|temos)\b.*\b(ao todo|no total|somando tudo)\b/.test(n)) return { intent: 'networth' };
@@ -2565,7 +2628,22 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
           notes: undated.length ? [`${undated.length} conta(s) em aberto não têm data de vencimento e não aparecem nesta lista.`] : [], actions: [{ label: 'Gerar demonstrativo', act: 'doc', params: { doc: 'debts', format: 'pdf' } }] };
       }
       case 'credit': return { kind: 'answer', title: 'Cartão de crédito', lines: s.credit.map(c => ({ label: C.displayName(c.name), value: 'Disponível ' + money(c.available), sub: `limite ${money(c.limit)} · utilizado ${money(c.used)}` })), notes: ['Limite de crédito não é dinheiro em caixa.'] };
-      case 'light': { const tl = C.trafficLight(ds, today); const M = v => money(v, tl.currency); return { kind: 'answer', title: 'Semáforo de liquidez', total: tl.level, totalLabel: tl.why, lines: [{ label: 'Disponível em conta', value: M(tl.free) }, { label: `A pagar em ${tl.rules.dias} dias`, value: M(tl.pay) }, { label: 'Previsto para entrar', value: M(tl.inc) }, { label: 'Gasto médio por mês', value: tl.months ? M(tl.avgMonthly) : 'sem histórico' }], notes: tl.partial.length ? ['Cálculo parcial: ' + tl.partial.join(', ') + '.'] : [] }; }
+      case 'light': {
+        const tl = C.trafficLight(ds, today), M = v => money(v, tl.currency), cur = tl.currency;
+        const D = d => d === today ? 'hoje' : fd(d);
+        const why = r => r.code === 'falta_caixa' ? `Você terá ${M(r.available)}, mas ${r.name} de ${M(r.amount)} vence ${D(r.date)}: faltam ${M(r.missing)}.` + (r.next_income ? ` Próximo recebimento: ${r.next_income.name} (${M(r.next_income.amount)}) em ${fd(r.next_income.date)}.` : '')
+          : r.code === 'vencida_sem_dinheiro' ? `Conta essencial vencida sem dinheiro: faltam ${M(r.missing)}.` : r.code === 'vencida' ? `Há conta vencida (${M(r.amount)}): pague o quanto antes.`
+          : r.code === 'reserva_baixa' ? `Reserva de ${M(r.reserve)}, abaixo do mínimo de ${M(r.reserve_min)}.` : r.code === 'sobra_pequena' ? `No dia mais apertado (${fd(r.min_date)}) sobram só ${M(r.min_balance)}.` : '';
+        const notes = tl.reasons.map(why).filter(Boolean);
+        if (tl.partial.length) notes.push('Dados incompletos: ' + tl.partial.join(', ') + '.');
+        if (q.save > 0) { const sim = C.trafficLight(ds, today, { save: q.save }); notes.unshift(`Se guardar ${M(q.save)} hoje: agora ${sim.level}, em ${sim.policy.horizon_days} dias ${sim.projected}${sim.level !== tl.level ? ' (muda de ' + tl.level + ')' : ' (não muda)'}. É só simulação: nada foi alterado.`); }
+        if (tl.level === 'VERMELHO') notes.push(`Para sair do vermelho: cubra ${M(Math.max(0, -tl.minBalance))} até ${fd(tl.minDate)} (adiar, negociar ou antecipar uma entrada).`);
+        const next = tl.events.filter(e => e.amount < 0).slice().sort((x, y) => (x.overdue === y.overdue ? 0 : x.overdue ? -1 : 1) || (x.date < y.date ? -1 : 1) || ((y.essential ? 1 : 0) - (x.essential ? 1 : 0))).slice(0, q.first ? 6 : 3);
+        const lines = [{ label: 'Disponível em conta', value: M(tl.free) }, { label: `Contas a pagar em ${tl.policy.horizon_days} dias`, value: M(tl.due) }, { label: 'Receitas previstas', value: M(tl.inc) },
+          { label: 'Dia mais apertado', value: M(tl.minBalance), sub: fd(tl.minDate) }, { label: 'Pagando tudo, sobra', value: M(tl.endBalance), sub: 'em ' + fd(tl.end) }, { label: 'Pode guardar hoje', value: M(tl.canSave), sub: 'sem faltar em nenhum dia' }]
+          .concat(next.map((e, i) => ({ label: (q.first ? (i + 1) + 'º a pagar: ' : 'Próxima: ') + e.name, value: M(-e.amount), sub: (e.overdue ? 'vencida em ' + fd(e.due) : 'vence ' + D(e.date)) + (e.essential ? '' : ' · não essencial') })));
+        return { kind: 'answer', title: 'Seu estado financeiro', total: tl.level, totalLabel: `agora · em ${tl.policy.horizon_days} dias: ${tl.projected}`, lines, notes };
+      }
       default: return null;
     }
   }
@@ -2582,6 +2660,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const cat = cats[0] ? cats[0].label : 'Alimentação/Compras';
     const prox = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1).toLocaleDateString('pt-BR', { month: 'long' });
     const groups = [
+      { title: 'Estado financeiro', items: ['Como estou financeiramente?', 'Quanto posso guardar?', 'Se eu guardar R$ 500, meu semáforo muda?', 'Qual conta devo pagar primeiro?', 'O que preciso fazer para sair do vermelho?'] },
       { title: 'Saldos', items: ['Qual meu patrimônio total?', acc && `Quanto tenho no ${acc}?`, hasRes && 'Quanto tenho guardado nas reservas?', ds.credit_facilities && ds.credit_facilities.length && 'Quanto tenho de limite no cartão?'] },
       { title: 'Gastos e entradas', items: ['Como está meu mês?', 'Onde mais gastei este mês?', `Quanto gastei com ${cat} este mês?`, 'Qual foi a maior despesa do mês?', 'Quanto gastei no mês passado?', 'Quanto recebi este mês?'] },
       { title: 'Contas a pagar', items: ['Quais contas vencem esta semana?', `Quais contas vencem em ${prox}?`, 'Quais contas estão vencidas?'] },
@@ -3737,8 +3816,8 @@ REGRAS
 
   // ---------- INÍCIO ----------
   function lightPill() {
-    const lvl = C.trafficLight(S.ds, todayStr()).level;
-    return `<button class="light ${lvl}" data-act="light" aria-label="Semáforo de liquidez: ${esc(lvl)}">${esc(lvl)}</button>`;
+    const lvl = C.trafficLight(S.ds, todayStr()).level, cls = /DADOS/.test(lvl) ? 'none' : lvl;
+    return `<button class="light ${cls}" data-act="light" aria-label="Semáforo financeiro: ${esc(lvl)}">${esc(/DADOS/.test(lvl) ? 'SEM DADOS' : lvl)}</button>`;
   }
   // Nome da moeda em português (ex.: EUR → euro). Cai no código se o navegador não souber.
   let curNames;
@@ -5199,28 +5278,68 @@ REGRAS
   }
 
   // ---------- semáforo ----------
+  // Frases dos motivos do semáforo, com valores e datas.
+  function tlReasonText(r, MC) {
+    const M2 = v => esc(money(v, MC)), D = d => d === todayStr() ? 'hoje' : d === addDaysYmd(todayStr(), 1) ? 'amanhã' : 'em ' + fdate(d);
+    if (r.code === 'falta_caixa') return `Você terá ${M2(r.available)} disponíveis, mas <b>${esc(r.name)}</b> de ${M2(r.amount)} vence ${D(r.date)}. <b>Faltam ${M2(r.missing)}</b>.` + (r.next_income ? ` O próximo recebimento previsto é ${esc(r.next_income.name)} (${M2(r.next_income.amount)}) ${D(r.next_income.date)}.` : ' Não há recebimento previsto no período.');
+    if (r.code === 'vencida_sem_dinheiro') return `Conta essencial <b>vencida</b>: ${r.items.map(i => `${esc(i.name)} (${M2(i.amount)}, venceu ${fdate(i.due)})`).join(', ')}. Disponível: ${M2(r.available)}. <b>Faltam ${M2(r.missing)}</b>.`;
+    if (r.code === 'vencida') return `Conta vencida: ${r.items.map(i => `${esc(i.name)} (${M2(i.amount)}, venceu ${fdate(i.due)})`).join(', ')}. Há dinheiro para ela: pague o quanto antes.`;
+    if (r.code === 'reserva_baixa') return `Reserva de ${M2(r.reserve)}, abaixo do mínimo de ${M2(r.reserve_min)}${r.auto ? ' (1 mês de gasto médio)' : ''}. Faltam ${M2(r.missing)} para a reserva.`;
+    if (r.code === 'sobra_pequena') return `No dia mais apertado (${fdate(r.min_date)}), sobram só ${M2(r.min_balance)}, menos que a margem de segurança de ${M2(r.margin)}.`;
+    return '';
+  }
+  const tlCls = l => /DADOS/.test(l) ? 'none' : l;
+  const syRole = () => (SY && SY.state && SY.state.vault_id ? SY.state.role : null);
   function editLight() {
-    const tl = C.trafficLight(S.ds, todayStr()), MC = tl.currency, R = tl.rules;
-    const row = (k, v, strong) => `<dt>${k}</dt><dd>${strong ? '<b>' + v + '</b>' : v}</dd>`;
-    openSheet({ title: 'Semáforo de liquidez', foot: false, body: `
-      <div style="display:flex;justify-content:center;margin:2px 0 12px"><span class="light ${tl.level}" style="font-size:16px;padding:10px 22px">${tl.level}</span></div>
-      <p style="margin:0 0 12px;text-align:center">${esc(tl.why)}</p>
-      <div class="card" style="margin:0"><dl class="kv">
-        ${row('Disponível em conta', M(tl.free, MC))}
-        ${row(`A pagar em ${R.dias} dias`, '− ' + M(tl.pay, MC))}
-        ${row('Sobra sem contar entradas', M(tl.folga, MC), true)}
-        ${row('Previsto para entrar', '+ ' + M(tl.inc, MC))}
-        ${row('Sobra contando entradas', M(tl.comPrevistas, MC))}
-        ${row(`Vence em ${R.dias_urgente} dias`, M(tl.payUrgent, MC))}
-        ${row('Gasto médio por mês', tl.months ? M(tl.avgMonthly, MC) + ` <span class="muted small">(${tl.months} ${tl.months === 1 ? 'mês' : 'meses'})</span>` : '<span class="muted">sem histórico</span>')}
-      </dl></div>
-      ${tl.partial.length ? `<div class="notice warn" style="margin-top:12px">${ic('alert')}<div class="ntext small">Cálculo parcial: ${esc(tl.partial.join(', '))}.</div></div>` : ''}
-      <div class="card" style="margin-top:12px"><div class="lbl">Como a cor é decidida</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:4px">
-        <li><b style="color:var(--danger)">Vermelho</b>: nem com as entradas previstas dá para pagar o que vence em ${R.dias} dias, ou o disponível não cobre o que vence em ${R.dias_urgente} dias.</li>
-        <li><b style="color:#D9622B">Laranja</b>: só fecha se as entradas previstas acontecerem.</li>
-        <li><b style="color:var(--warn)">Amarelo</b>: fecha, mas sobra menos de ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gasto médio.</li>
-        <li><b style="color:var(--pos)">Verde</b>: fecha e sobra pelo menos ${R.meses_folga_verde === 1 ? '1 mês' : R.meses_folga_verde + ' meses'} de gasto médio.</li></ul>
-        <p class="small muted" style="margin:8px 0 0">É calculado sozinho a partir dos dados, igual em todos os aparelhos: ninguém escolhe a cor. Para mudar o critério, peça ao ChatGPT para ajustar "traffic_light_rules" no backup.</p></div>` });
+    let save = 0;
+    const sh = openSheet({ title: 'Seu estado financeiro', foot: false, body: '' });
+    const draw = () => {
+      const tl = C.trafficLight(S.ds, todayStr(), { save }), MC = tl.currency, P = tl.policy;
+      const row = (k, v, strong) => `<dt>${k}</dt><dd>${strong ? '<b>' + v + '</b>' : v}</dd>`;
+      const bars = tl.flow.length > 1 ? (() => { const vals = tl.flow.map(f => f.balance), mx = Math.max(1, ...vals.map(Math.abs)); return `<div style="display:flex;align-items:flex-end;gap:2px;height:56px;margin:10px 0 2px">${tl.flow.map(f => `<div title="${esc(fdate(f.date))}: ${esc(money(f.balance, MC))}" style="flex:1;min-width:3px;height:${Math.max(4, Math.round(Math.abs(f.balance) / mx * 54))}px;border-radius:3px;background:${f.balance < 0 ? 'var(--danger)' : 'var(--accent)'};opacity:${f.balance < 0 ? 1 : .75}"></div>`).join('')}</div><div class="tiny muted" style="display:flex;justify-content:space-between"><span>hoje</span><span>saldo dia a dia</span><span>${fdate(tl.end)}</span></div>`; })() : '';
+      sh.body.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div class="card" style="margin:0;text-align:center"><div class="lbl">Agora</div><span class="light ${tlCls(tl.level)}" style="margin-top:6px;font-size:13px">${esc(tl.level)}</span></div>
+          <div class="card" style="margin:0;text-align:center"><div class="lbl">Em ${P.horizon_days} dias</div><span class="light ${tlCls(tl.projected)}" style="margin-top:6px;font-size:13px">${esc(tl.projected)}</span></div></div>
+        ${save ? `<div class="notice info">${ic('info')}<div class="ntext small"><b>Simulação:</b> guardando ${esc(money(save, MC))} hoje. Nada foi alterado nos seus dados.</div></div>` : ''}
+        ${tl.reasons.length ? `<div class="card" style="margin:0 0 12px"><div class="lbl">Por quê</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">${tl.reasons.map(r => `<li><b style="color:${r.sev === 'VERMELHO' ? 'var(--danger)' : 'var(--warn)'}">${r.sev === 'VERMELHO' ? 'Risco' : 'Atenção'}:</b> ${tlReasonText(r, MC)}</li>`).join('')}</ul></div>`
+          : `<p class="small" style="margin:0 0 12px">${/DADOS/.test(tl.level) ? '' : `Todas as contas dos próximos ${P.horizon_days} dias estão cobertas nas datas certas, a reserva está no mínimo e sobra margem.`}</p>`}
+        ${tl.partial.length ? `<div class="notice warn">${ic('alert')}<div class="ntext small"><b>Dados incompletos:</b> ${esc(tl.partial.join(', '))}. Por isso o app não mostra verde.</div></div>` : ''}
+        <div class="card" style="margin:0 0 12px"><dl class="kv">
+          ${row('Disponível em conta', M(tl.free, MC))}
+          ${row(`Contas a pagar em ${P.horizon_days} dias`, '− ' + M(tl.due, MC) + (tl.overdue ? ` <span class="badge danger">${tl.overdue} vencida(s)</span>` : ''))}
+          ${row('Receitas previstas', '+ ' + M(tl.inc, MC) + (tl.uncertainSkipped ? ` <span class="muted small">(${tl.uncertainSkipped} incerta(s) fora)</span>` : ''))}
+          ${row('Dia mais apertado', M(tl.minBalance, MC) + ` <span class="muted small">${esc(fdate(tl.minDate))}</span>`, true)}
+          ${row(`Sobra em ${fdate(tl.end)}`, M(tl.endBalance, MC))}
+          ${row('Reservas', M(tl.reserve, MC) + (tl.reserveMin ? ` <span class="muted small">mínimo ${esc(money(tl.reserveMin, MC))}</span>` : ''))}
+          ${row('Pode guardar hoje', M(tl.canSave, MC), true)}
+        </dl>${bars}</div>
+        <div class="card" style="margin:0 0 12px"><div class="lbl">E se eu guardar…</div><p class="small muted" style="margin:4px 0 8px">Simula separar um valor para uma meta ou reserva. Não muda nada nos seus dados.</p>
+          <div style="display:flex;gap:8px"><input id="tl-sim" class="input num" inputmode="decimal" placeholder="ex.: 500" value="${save ? String(save).replace('.', ',') : ''}"><button class="btn secondary" style="width:auto;flex:none;margin:0" data-sim>Simular</button></div></div>
+        <details class="card" style="margin:0"><summary style="font-weight:700;cursor:pointer">Como a cor é decidida e regras</summary>
+          <ul class="small" style="padding-left:18px;margin:8px 0;display:grid;gap:4px">
+            <li>O app calcula o saldo <b>dia a dia</b> nos próximos ${P.horizon_days} dias: tira cada conta na data dela (vencidas contam hoje) e soma as receitas previstas na data delas. Reservas e limite de crédito não entram.</li>
+            <li><b style="color:var(--danger)">Vermelho</b>: falta dinheiro em algum dia, ou há conta essencial vencida sem dinheiro para ela. Um salário que chega depois não cobre uma conta que vence antes.</li>
+            <li><b style="color:var(--warn)">Amarelo</b>: não falta, mas a reserva está abaixo do mínimo, a sobra é menor que a margem de segurança, ou há conta vencida.</li>
+            <li><b style="color:var(--pos)">Verde</b>: nada disso. Com dados incompletos nunca fica verde.</li></ul>
+          ${syRole() === 'viewer' ? '' : `<div class="field"><label for="tl-h">Analisar os próximos</label><select id="tl-h" class="input">${C.TL_HORIZONS.map(h => `<option value="${h}" ${h === P.horizon_days ? 'selected' : ''}>${h} dias</option>`).join('')}</select></div>
+          <div class="field"><label for="tl-r">Reserva mínima (${esc(MC)})</label><input id="tl-r" class="input num" inputmode="decimal" placeholder="automática: ${esc(money(tl.avgMonthly, MC))} (1 mês de gasto)" value="${P.reserve_min != null ? String(P.reserve_min).replace('.', ',') : ''}"></div>
+          <div class="field"><label for="tl-m">Margem de segurança (% do gasto mensal)</label><input id="tl-m" class="input num" inputmode="numeric" value="${P.safety_margin_pct}"></div>
+          <label class="check"><input type="checkbox" id="tl-u" ${P.count_uncertain_income ? 'checked' : ''}><div><b>Contar receitas incertas</b><div class="small muted">Desligado: comissões e valores "talvez" não entram na conta.</div></div></label>
+          <button class="btn secondary" data-pol>Salvar regras</button><p class="tiny muted" style="margin:6px 0 0">As regras valem para todos do cofre e vão no backup (traffic_light_policy).</p>`}</details>`;
+      sh.body.querySelector('[data-sim]').onclick = () => { const v = C.num(sh.body.querySelector('#tl-sim').value); save = v > 0 ? C.round2(v) : 0; draw(); };
+      const pol = sh.body.querySelector('[data-pol]');
+      if (pol) pol.onclick = async () => {
+        const g = id => sh.body.querySelector(id);
+        const rv = g('#tl-r').value.trim(), mv = C.num(g('#tl-m').value);
+        const np = Object.assign({}, S.ds.traffic_light_policy || {}, { version: 1, horizon_days: +g('#tl-h').value, reserve_min: rv ? C.round2(C.num(rv)) : null, safety_margin_pct: mv >= 0 && mv <= 100 ? mv : 10, count_uncertain_income: g('#tl-u').checked });
+        if (rv && !(C.num(rv) >= 0)) { showError('Reserva mínima', 'Digite um valor, ex.: 3000, ou deixe vazio para automático.'); return; }
+        const ds2 = C.clone(S.ds); ds2.traffic_light_policy = np;
+        await commit(ds2, { audit: { type: 'traffic-light-policy', description: `Regras do semáforo: ${np.horizon_days} dias, reserva ${np.reserve_min == null ? 'automática' : np.reserve_min}, margem ${np.safety_margin_pct}%` }, toast: 'Regras do semáforo salvas' });
+        draw();
+      };
+    };
+    draw();
   }
 
   // ---------- IMPORTAÇÃO ----------
