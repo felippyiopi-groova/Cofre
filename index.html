@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-xzXJn8K6gTfSP80zop/M5RjXg0sNFV/CuuiUmeTa9V0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-I0MFZztIhPVLtfRS2ysXPLToB7bDH18LNBOSa6r99Bs='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -367,25 +367,12 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
 .btn.wl-cta { font-size: 17px; padding: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .btn.wl-cta svg { width: 18px; height: 18px; }
 .wl-micro { text-align: center; font-size: 12.5px; color: var(--ink-2); margin: 8px 0 6px; }
-.wl-h2 { font-size: 21px; letter-spacing: -0.02em; line-height: 1.2; margin: 30px 2px 12px; }
-.wl-feats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.wl-feat { background: var(--glass, var(--card)); border: 1px solid var(--glass-edge, var(--line)); border-radius: 18px; padding: 14px 12px; box-shadow: var(--shadow); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
-.wl-fi { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 10px; }
-.wl-fi svg { width: 19px; height: 19px; }
-.wl-feat b { display: block; font-size: 14.5px; margin-bottom: 4px; line-height: 1.25; }
-.wl-feat span { display: block; font-size: 13px; color: var(--ink-2); line-height: 1.4; }
-.wl-trust { margin-top: 22px; border-radius: 22px; padding: 6px 16px; background: linear-gradient(160deg, var(--accent-soft), transparent 140%); border: 1px solid var(--glass-edge, var(--line)); }
-.wl-trust > div { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; }
-.wl-trust > div + div { border-top: 1px solid var(--line); }
-.wl-trust svg { width: 22px; height: 22px; flex: none; color: var(--accent); margin-top: 1px; }
-.wl-trust p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink-2); } .wl-trust p b { color: var(--ink); }
-.wl-steps { list-style: none; counter-reset: wl; padding: 0; margin: 0 0 16px; display: grid; gap: 12px; }
-.wl-steps li { counter-increment: wl; display: grid; grid-template-columns: 34px 1fr; column-gap: 12px; align-items: start; }
-.wl-steps li::before { content: counter(wl); grid-row: span 2; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #fff; background: linear-gradient(145deg, #0A2E3B, #0B6E69); }
-.wl-steps b { font-size: 15px; } .wl-steps span { font-size: 13.5px; color: var(--ink-2); }
+.wl-pts { display: grid; gap: 10px; margin: 22px 4px 0; }
+.wl-pts > div { display: flex; align-items: center; gap: 12px; font-size: 15px; color: var(--ink-2); } .wl-pts b { color: var(--ink); }
+.wl-pts i { width: 36px; height: 36px; border-radius: 11px; background: var(--accent-soft); color: var(--accent); flex: none; display: grid; place-items: center; } .wl-pts i svg { width: 19px; height: 19px; }
 .wl-more { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
 .wl-more-t { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 10px; }
-@media (max-width: 350px) { .wl-feats { grid-template-columns: 1fr; } .wl-hero h1 { font-size: 27px; } }
+@media (max-width: 350px) { .wl-hero h1 { font-size: 27px; } }
 @media (prefers-reduced-motion: reduce) { .wl-mock { transform: none; } }
 /* marca: tela de boas-vindas e tela de entrar */
 .brand { display: grid; justify-items: center; gap: 8px; text-align: center; margin: 18px 0 20px; }
@@ -3626,13 +3613,12 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
   }
   function viewWelcome() {
     const needsInstall = isIOS() && !isStandalone();
-    const feat = (i, t, d) => `<div class="wl-feat"><div class="wl-fi">${ic(i)}</div><div><b>${t}</b><span>${d}</span></div></div>`;
     return `<div class="wl">
     <section class="wl-hero">
       <div class="wl-logo">${logoSvg()}</div>
       <div class="wl-eyebrow">Cofre · finanças da família, sem planilha</div>
       <h1>Saiba onde está <span>cada real</span>. E guarde mais todo mês.</h1>
-      <p class="wl-sub">Contas, cartões, reservas e dívidas da família num lugar só. O Cofre mostra quanto você tem de verdade, quanto ainda pode gastar e quanto falta para cada meta.</p>
+      <p class="wl-sub">Contas, cartões, reservas e metas da família num lugar só, fácil de entender.</p>
     </section>
     <div class="wl-mock" aria-label="Exemplo da tela do app">
       <div class="wl-mk-top"><span>Patrimônio da família</span><span class="wl-tag">exemplo</span></div>
@@ -3646,34 +3632,14 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
     ${needsInstall ? `<div class="notice info" style="margin-top:14px">${ic('info')}<div class="ntext"><b>Dica para iPhone: instale primeiro.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b> e abra pelo ícone. Assim o Cofre vira um app, abre em tela cheia e seus dados ficam no lugar certo (os do Safari ficam separados).</div></div>` : ''}
 
-    <h2 class="wl-h2">Tudo o que a família precisa para cuidar do dinheiro</h2>
-    <div class="wl-feats">
-      ${feat('scan', 'Lança em segundos', 'Responda perguntas simples ou mande a foto do comprovante: o app preenche para você.')}
-      ${feat('target', 'Metas que saem do papel', 'Separe para viagem, reserva ou carro e veja a barra encher a cada depósito.')}
-      ${feat('cal', 'Nenhuma conta esquecida', 'Contas a pagar, dívidas e parcelas com vencimento na agenda.')}
-      ${feat('bar', 'Para onde foi o dinheiro', 'Gastos por categoria, extrato e relatórios em PDF ou planilha.')}
-      ${feat('chat', 'Pergunte em português', '“Quanto gastei com mercado este mês?” A resposta aparece na hora.')}
-      ${feat('scale', 'Em qualquer moeda', 'Real, dólar, euro: cotação automática e tudo somado na sua moeda.')}
+    <div class="wl-pts">
+      <div><i>${ic('scan')}</i><span>Lance em segundos, até pela <b>foto do comprovante</b></span></div>
+      <div><i>${ic('target')}</i><span><b>Metas e contas a pagar</b> sempre à vista</span></div>
+      <div><i>${ic('shield')}</i><span><b>Criptografado</b> e para usar com a <b>família</b></span></div>
     </div>
-
-    <div class="wl-trust">
-      <div>${ic('shield')}<p><b>Privado de verdade.</b> Seus números são criptografados no aparelho, antes de sair dele. Nem o servidor do Cofre consegue ler.</p></div>
-      <div>${ic('lock')}<p><b>Feito para dividir.</b> Convide quem divide as contas com você. Cada pessoa tem seu acesso e tudo fica sincronizado.</p></div>
-      <div>${ic('check')}<p><b>Funciona sem internet</b> e sem conectar a conta do banco. Você decide o que entra.</p></div>
-    </div>
-
-    <h2 class="wl-h2">Como começa</h2>
-    <ol class="wl-steps">
-      <li><b>Cadastre suas contas</b><span>Banco, carteira, cartão e reserva, com o saldo de hoje.</span></li>
-      <li><b>Registre o dia a dia</b><span>Um gasto, um Pix recebido, uma conta paga. Uma pergunta por vez.</span></li>
-      <li><b>Veja o quadro completo</b><span>Quanto sobra, o que vence e quanto falta para cada meta.</span></li>
-    </ol>
-    <button class="btn" data-act="fresh">${ic('plus')} Começar agora</button>
-
     <div class="wl-more"><div class="wl-more-t">Outras formas de começar</div>
       <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
       <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
-      <p class="help" style="text-align:center;margin:6px 0 0">Aceita o backup inicial, arquivos devolvidos pelo ChatGPT, backups criptografados e ZIP com comprovantes.</p>
     </div>
     <div class="notice warn" style="margin-top:16px">${ic('alert')}<div class="ntext small">${WARNING_TEXT}</div></div>
     </div>`;
