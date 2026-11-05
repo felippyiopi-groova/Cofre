@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-I0MFZztIhPVLtfRS2ysXPLToB7bDH18LNBOSa6r99Bs='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-wuGU4SdC5FE0Eyw1hblXfiiAVsMA+7JiWZH0hBt2Om8='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -2815,13 +2815,15 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     // valor: preferir linha com "valor"/"total"/"pago"
     let best = null;
     lines.forEach((l, i) => {
-      const f = fold(l); const v = money(l); const label = /\bvalor|\btotal|\bpago\b|\bquantia|\bmontante/.test(f) && !/saldo|tarifa|juros|multa|desconto|limite|anterior/.test(f);
+      const f = fold(l); const v = money(l); const label = /\bvalor|\btotal|\bpago\b|\bquantia|\bmontante|a pagar/.test(f) && !/saldo|tarifa|juros|multa|desconto|limite|anterior|troco|tributos|imposto/.test(f);
       let val = v, score = 0;
       if (label && val == null && lines[i + 1] && money(lines[i + 1]) != null) { val = money(lines[i + 1]); }
       if (val == null) return;
       score = (label ? 10 : 0) + (/r\$/.test(f) || (lines[i + 1] && /r\$/i.test(lines[i + 1])) ? 3 : 0) - (/saldo|tarifa|limite/.test(f) ? 20 : 0) - i * 0.01;
       if (/valor (do documento|original|nominal)/.test(f)) score -= 2; // em boleto, preferir o valor pago
-      if (/valor (pago|cobrado|total|da transferencia|do pix|transferido|enviado|recebido)/.test(f)) score += 5;
+      if (/valor (pago|cobrado|total|da transferencia|do pix|transferido|enviado|recebido)|valor a pagar|total a pagar/.test(f)) score += 5;
+      if (/troco|valor recebido em dinheiro|desconto/.test(f)) score -= 15;
+      if (/a pagar|valor pago|total pago/.test(f)) score += 3; // vale mais que "valor total" (antes do desconto)
       if (!best || score > best.score) best = { val, score };
     });
     if (best && best.score > -5) { r.amount = best.val; r.found.push('valor'); }
@@ -2855,15 +2857,37 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
   }
 
   // ---------- IA: provedores ----------
-  const PROMPT = `Você lê comprovantes bancários brasileiros (Pix, TED, boleto, cartão, depósito) para um app de finanças pessoais.
-Responda SOMENTE com um objeto JSON, sem texto antes ou depois, com estas chaves:
-{"e_comprovante": true/false, "valor": número com ponto decimal (ex.: 1234.56) ou null, "data": "AAAA-MM-DD" ou null,
- "direcao": "saida" se quem tem o comprovante pagou/enviou, "entrada" se recebeu,
- "meio": "pix" | "boleto" | "ted" | "doc" | "cartao" | "deposito" | "transferencia" | "outro",
- "contraparte": nome de quem recebeu (se saída) ou de quem pagou (se entrada), ou "",
- "banco_contraparte": instituição da contraparte ou "", "descricao_curta": até 5 palavras, ex.: "Pix para Maria Souza" }
-Regras: use o valor efetivamente pago/transferido (não saldo, limite ou tarifa). Não invente: se não der para ler, use null ou "".
-Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de autenticação na resposta.`;
+  const PROMPT = `Você é o leitor de comprovantes de um app brasileiro de finanças pessoais. A imagem, o PDF ou o texto pode ser:
+comprovante bancário (Pix, TED, DOC, transferência, boleto pago, depósito, pagamento de fatura), print da tela do app do banco,
+cupom fiscal / NFC-e / notinha de loja (impressa ou fotografada), recibo, ou comprovante de maquininha de cartão.
+
+Responda SOMENTE com um objeto JSON, sem texto antes ou depois, exatamente com estas chaves:
+{"e_comprovante": true ou false,
+ "tipo_documento": "transferencia" | "pix" | "boleto" | "cupom_fiscal" | "recibo" | "maquininha" | "fatura" | "outro",
+ "valor": número com ponto decimal (ex.: 1234.56) ou null,
+ "data": "AAAA-MM-DD" ou null,
+ "direcao": "saida" ou "entrada",
+ "meio": "pix" | "boleto" | "ted" | "doc" | "cartao" | "dinheiro" | "deposito" | "transferencia" | "outro",
+ "contraparte": texto, "banco_contraparte": texto, "categoria": texto, "descricao_curta": texto}
+
+REGRAS
+1. VALOR: o valor efetivamente pago, transferido ou recebido.
+   - Boleto: "valor pago"/"valor cobrado" (com juros e descontos), não o "valor do documento".
+   - Cupom fiscal/notinha: "VALOR A PAGAR" ou "TOTAL" depois dos descontos; nunca o valor de um item, o "valor recebido" em dinheiro nem o "troco".
+   - Nunca use saldo, limite, tarifa, cashback ou valor de parcela futura. Números brasileiros: "1.234,56" = 1234.56.
+2. DATA: dia em que o pagamento/transferência aconteceu (ou a emissão do cupom). Não use vencimento, validade ou data de nascimento. Datas "05 NOV 2026", "05/11/26" → "2026-11-05".
+3. DIRECAO: "entrada" só se a pessoa RECEBEU (ex.: "Pix recebido", "você recebeu", "crédito em conta", "depósito recebido"). Pagamentos, envios, compras e cupons são "saida".
+4. CONTRAPARTE: em saída, quem RECEBEU o dinheiro (destino, favorecido, beneficiário, recebedor, loja). Em entrada, quem PAGOU (origem, pagador, remetente).
+   - Cupom/maquininha: nome fantasia do estabelecimento (ex.: "Padaria Pão Quente"); se só houver razão social, use-a sem "LTDA", "ME", "EIRELI".
+   - Escreva nomes de pessoas e lojas com iniciais maiúsculas (ex.: "Maria da Silva").
+   - Não confunda com o nome do banco nem com o próprio dono do comprovante.
+5. BANCO_CONTRAPARTE: instituição de quem recebeu (saída) ou de quem pagou (entrada), com nome curto e conhecido (ex.: "Nubank", "Itaú", "Banco do Brasil", "Caixa", "Inter", "Mercado Pago", "PicPay"). Vazio se não houver.
+6. MEIO: em cupom/maquininha, use a forma de pagamento impressa (crédito/débito → "cartao", dinheiro → "dinheiro", Pix → "pix").
+7. CATEGORIA: escolha UMA da lista abaixo que melhor descreve o gasto, ou "" se não souber. Em "entrada", use "".
+8. DESCRICAO_CURTA: até 5 palavras, ex.: "Pix para Maria Silva", "Mercado Extra", "Conta de luz Enel".
+9. Foto torta, borrada ou com sombra: leia o que for possível; se não der para ter certeza de um campo, use null ou "". Não invente.
+10. Se não for comprovante, cupom ou recibo de pagamento, responda "e_comprovante": false e o resto vazio ou null.
+11. PRIVACIDADE: nunca inclua CPF, CNPJ, chave Pix, agência, número de conta, número de cartão nem código de autenticação em nenhum campo.`;
   const PROVIDERS = {
     gemini: { name: 'Google Gemini', company: 'Google', art: 'o', host: 'https://generativelanguage.googleapis.com', keyHint: 'começa com AIza', keyUrl: 'https://aistudio.google.com/apikey', free: true },
     openai: { name: 'ChatGPT (OpenAI)', company: 'OpenAI', art: 'a', host: 'https://api.openai.com', keyHint: 'começa com sk-', keyUrl: 'https://platform.openai.com/api-keys', free: false },
@@ -2899,8 +2923,9 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
   }
 
   // Monta o pedido de leitura. file: { mime, base64 } (imagem ou PDF) e/ou text (texto já extraído do PDF).
-  function readRequest(p, key, model, file, text) {
-    const prompt = PROMPT + (text ? '\n\nTexto extraído do comprovante:\n"""\n' + String(text).slice(0, 12000) + '\n"""' : '');
+  function readRequest(p, key, model, file, text, opts) {
+    opts = opts || {};
+    const prompt = PROMPT + (opts.categories && opts.categories.length ? '\n\nLISTA DE CATEGORIAS: ' + opts.categories.join(' | ') : '') + (opts.rules ? '\n\nREGRAS EXTRAS DA FAMÍLIA (siga também):\n' + String(opts.rules).slice(0, 2000) : '') + (text ? '\n\nTexto extraído do comprovante:\n"""\n' + String(text).slice(0, 12000) + '\n"""' : '');
     const isPdf = file && file.mime === 'application/pdf';
     if (p === 'gemini') {
       const parts = [{ text: prompt }]; if (file) parts.push({ inline_data: { mime_type: file.mime, data: file.base64 } });
@@ -2927,7 +2952,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     if (status === 429) return p === 'gemini' ? 'Passou do limite do plano grátis do Gemini por agora. Espere um pouco (o limite volta a cada minuto e zera todo dia) e tente de novo.' : 'Limite de uso ou crédito esgotado no ' + nm + '. Confira o saldo/limite na sua conta.' + (raw ? ' Detalhe: ' + raw : '');
     if (status === 402 || /credit|billing|quota|insufficient/i.test(raw)) return 'Sem crédito no ' + nm + '. Adicione crédito na sua conta ou use outra IA.';
     if (status === 404) return 'O modelo escolhido não existe mais no ' + nm + '. Em Mais → Leitor de comprovantes, toque em "Testar chave" para atualizar a lista.';
-    if (status >= 500) return 'O ' + nm + ' está com problema agora. Tente de novo em alguns minutos.';
+    if (status >= 500) return 'O ' + nm + ' está sobrecarregado ou com problema agora (erro ' + status + ').' + (raw ? ' Detalhe: ' + raw : '');
     return 'O ' + nm + ' recusou o pedido' + (status ? ' (erro ' + status + ')' : '') + '.' + (raw ? ' Detalhe: ' + raw : '');
   }
   function responseText(p, json) {
@@ -2936,7 +2961,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     return { text: (json.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), blocked: json.stop_reason === 'refusal' };
   }
   // Resposta da IA -> mesmos campos da leitura local.
-  function fromAi(text) {
+  function fromAi(text, categories) {
     const s = String(text || ''); const a = s.indexOf('{'), b = s.lastIndexOf('}');
     if (a < 0 || b < a) throw new Error('A IA não devolveu os dados no formato esperado.');
     let j; try { j = JSON.parse(s.slice(a, b + 1)); } catch (e) { throw new Error('A IA não devolveu os dados no formato esperado.'); }
@@ -2950,6 +2975,10 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     r.counterparty = clean(j.contraparte); if (r.counterparty) r.found.push('nome');
     r.bank = clean(j.banco_contraparte);
     r.description = r.counterparty || clean(j.descricao_curta) || (r.methodLabel || '');
+    if (j.meio === 'dinheiro') { r.method = 'dinheiro'; r.methodLabel = 'Dinheiro'; }
+    const DOC = { cupom_fiscal: 'Cupom fiscal', recibo: 'Recibo', maquininha: 'Comprovante de cartão', boleto: 'Boleto', fatura: 'Fatura' };
+    r.docLabel = DOC[j.tipo_documento] || '';
+    if (r.type === 'despesa' && j.categoria && (!categories || categories.indexOf(j.categoria) >= 0)) r.category = j.categoria;
     r.complete = r.amount != null && !!r.date;
     return r;
   }
@@ -3629,7 +3658,8 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     </div>
     <button class="btn wl-cta" data-act="fresh">Começar meu Cofre ${ic('right')}</button>
     <p class="wl-micro">Leva 2 minutos · sem cadastro obrigatório · sem acesso ao seu banco</p>
-    <button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>
+    ${syReady() ? `<div class="notice ok" style="margin-top:12px">${ic('check')}<div class="ntext"><b>Conta conectada</b>${SY.state.user && SY.state.user.email ? ' (' + esc(SY.state.user.email) + ')' : ''}. Agora importe seu backup ou comece do zero: tudo vai criptografado para a sua conta.</div></div><button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>`
+      : `<button class="btn ghost" data-act="page" data-tab="mais" data-page="sync">Já uso o Cofre em outro aparelho: entrar</button>`}
     ${needsInstall ? `<div class="notice info" style="margin-top:14px">${ic('info')}<div class="ntext"><b>Dica para iPhone: instale primeiro.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b> e abra pelo ícone. Assim o Cofre vira um app, abre em tela cheia e seus dados ficam no lugar certo (os do Safari ficam separados).</div></div>` : ''}
 
     <div class="wl-pts">
@@ -3638,7 +3668,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       <div><i>${ic('shield')}</i><span><b>Criptografado</b> e para usar com a <b>família</b></span></div>
     </div>
     <div class="wl-more"><div class="wl-more-t">Outras formas de começar</div>
-      <button class="btn secondary" data-act="import">${ic('up')} Importar backup JSON</button>
+      <button class="btn secondary" data-act="import-welcome">${ic('up')} Importar backup JSON</button>
       <button class="btn ghost" data-act="import-paste">Colar texto do ChatGPT</button>
     </div>
     <div class="notice warn" style="margin-top:16px">${ic('alert')}<div class="ntext small">${WARNING_TEXT}</div></div>
@@ -4407,8 +4437,8 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       { id: 'desc', when: a => (a.type === 'despesa' || a.type === 'receita') && !(preset && preset.obligation_id), type: 'input', q: a => a.type === 'despesa' ? 'Com o quê?' : 'De onde veio?', help: a => a.receipt && a.receipt.description && a.description === a.receipt.description.slice(0, 80) ? rcHelp('Nome que está no comprovante. Pode trocar por algo que você reconheça, ex.: Mercado.') : 'Escreva do seu jeito. A categoria é sugerida pelo que você escrever.',
         input: a => ({ kind: 'text', value: a.description, placeholder: a.type === 'despesa' ? 'ex.: Mercado' : 'ex.: Salário' }),
         quick: a => uniq(frequentDescriptions(a.type, 4).concat(a.type === 'despesa' ? ['Mercado', 'Uber', 'Farmácia', 'Restaurante', 'Combustível', 'Padaria'] : ['Salário', 'Pix recebido', 'Reembolso', 'Venda', 'Rendimento'])).slice(0, 8).map(x => [x, x]),
-        apply: (a, v) => { if (!v) return 'Escreva uma descrição curta ou toque numa sugestão.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : null; } } },
-      { id: 'cat', when: a => a.type === 'despesa' && !(preset && preset.obligation_id), type: 'choice', q: () => 'Qual categoria?', help: a => a.category_auto ? `Sugeri pela palavra “${esc(a.category_auto)}”. Toque para confirmar ou trocar.` : 'Escolha a que mais combina.',
+        apply: (a, v) => { if (!v) return 'Escreva uma descrição curta ou toque numa sugestão.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : (a.category ? a.category_auto : null); } } },
+      { id: 'cat', when: a => a.type === 'despesa' && !(preset && preset.obligation_id), type: 'choice', q: () => 'Qual categoria?', help: a => a.category_auto === 'leitura do comprovante' ? 'Sugerida pela leitura do comprovante. Toque para confirmar ou trocar.' : a.category_auto ? `Sugeri pela palavra “${esc(a.category_auto)}”. Toque para confirmar ou trocar.` : 'Escolha a que mais combina.',
         options: a => C.CATEGORIES.map(c => ({ v: c, label: esc(c) + (a.category === c && a.category_auto ? ' <span class="badge">sugerida</span>' : ''), on: a.category === c })).concat([{ v: '', label: 'Sem categoria', on: false }]),
         apply: (a, v) => { a.catManual = v !== a.category || a.catManual; a.category = v; if (a.catManual) a.category_auto = null; } },
       { id: 'acc', type: 'choice', q: a => ({ despesa: 'De onde saiu o dinheiro?', receita: 'Em qual conta entrou?', transferencia: 'De qual conta saiu?', pagamento_fatura: 'De qual conta saiu o pagamento?' })[a.type],
@@ -4453,8 +4483,18 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
   const IA_DEFAULT = () => ({ provider: '', keys: {}, models: {}, lists: {}, noWarn: false });
   async function iaLoad() { if (S.ia) return S.ia; try { S.ia = Object.assign(IA_DEFAULT(), (await DB.get('ia_cfg')) || {}); } catch (e) { S.ia = IA_DEFAULT(); } return S.ia; }
   async function iaSave() { await DB.set('ia_cfg', S.ia); }
-  const iaReady = () => !!(S.ia && S.ia.provider && S.ia.keys[S.ia.provider]);
   const iaModel = p => (S.ia.models[p]) || (S.ia.lists[p] || [])[0] || Leitor.DEFAULT_MODEL[p];
+  // Chave em uso: a deste aparelho (se houver) ou a compartilhada pela família no cofre sincronizado.
+  function iaActive() {
+    const ia = S.ia; if (!ia) return null;
+    if (ia.provider && ia.keys[ia.provider]) return { provider: ia.provider, key: ia.keys[ia.provider], model: iaModel(ia.provider), list: ia.lists[ia.provider] || [], rules: ia.rules || '', source: 'aparelho' };
+    const sh = ia.shared; if (sh && sh.key && Leitor.PROVIDERS[sh.provider]) return { provider: sh.provider, key: sh.key, model: sh.model || Leitor.DEFAULT_MODEL[sh.provider], list: sh.list || [], rules: sh.rules || '', source: 'familia', by: sh.by || '' };
+    return null;
+  }
+  const iaReady = () => !!iaActive();
+  // A chave compartilhada viaja pela sincronização (criptografada), fora dos dados exportados.
+  const IA_SYNC_KEY = '__ia_compartilhada';
+  function iaSetShared(obj) { S.ia.shared = obj; return iaSave().then(() => { if (syReady()) syRun(false); }); }
   const maskKey = k => k ? k.slice(0, 4) + '••••' + k.slice(-4) : '';
   const IA_PRIVACY = {
     gemini: 'No plano <b>grátis</b> do Gemini, o Google pode usar o que você envia para melhorar os produtos dele, e pessoas podem revisar. Se você ativar faturamento (plano pago) na conta Google AI Studio, isso deixa de valer.',
@@ -4462,6 +4502,15 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     anthropic: 'A Anthropic diz que não usa o que chega pela API para treinar modelos (por padrão) e guarda por um período curto. A API é paga por uso: precisa colocar crédito na conta.'
   };
 
+  function famCard() {
+    const sh = S.ia.shared, canEdit = syReady() && SY.state.role !== 'viewer';
+    if (!sh || !sh.key) return syReady() ? '' : `<div class="notice info">${ic('info')}<div class="ntext small">Com uma conta conectada (Mais → Conta e pessoas), a chave que você configurar aqui pode valer para <b>todos do cofre</b>.</div></div>`;
+    const P = Leitor.PROVIDERS[sh.provider] || { name: sh.provider };
+    const mine = S.ia.provider && S.ia.keys[S.ia.provider];
+    return `<div class="card"><div class="lbl">Chave da família</div><p class="small" style="margin:6px 0">${ic('check')} <b>${esc(P.name)}</b> compartilhada${sh.by ? ' por ' + esc(sh.by) : ''}. Todos do cofre leem comprovantes com ela, sem configurar nada.${mine ? ' <span class="muted">Neste aparelho vale a sua chave pessoal, configurada abaixo.</span>' : ''}</p>
+      <p class="small muted" style="margin:0 0 8px">O uso de todos conta no limite (ou na conta) de quem compartilhou.${sh.rules ? ' Tem regras extras: “' + esc(sh.rules.slice(0, 80)) + (sh.rules.length > 80 ? '…' : '') + '”.' : ''}</p>
+      ${canEdit ? `<button class="btn ghost" data-act="ia-unshare">Parar de compartilhar</button>` : ''}</div>`;
+  }
   function pageLeitor() {
     if (!S.ia) { iaLoad().then(() => render()); return backBar('Mais', 'mais') + '<p class="muted">Carregando…</p>'; }
     const ia = S.ia, P = Leitor.PROVIDERS;
@@ -4472,6 +4521,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
         <li><b>PDF</b>: o app lê sozinho, aqui no aparelho. Nada sai do celular.</li>
         <li><b>Foto ou print</b>: precisa de uma IA. Ela lê a imagem e devolve valor, data e nome.</li>
         <li>Você <b>confere cada resposta</b> antes de salvar, e o comprovante fica anexado ao lançamento.</li></ol></div>
+      ${famCard()}
       <div class="section-title"><span>IA para ler fotos (opcional)</span></div>
       <div class="card"><p class="small" style="margin-top:0">Cada pessoa usa a <b>própria chave</b> da IA que preferir. A chave fica <b>só neste aparelho</b>: não vai para backup, sincronização nem para a família.</p>
         <div class="rows" style="margin-top:6px">${Object.keys(P).map(p => `<button class="radio-card" data-act="ia-pick" data-p="${p}" style="width:100%;text-align:left;${sel === p ? 'border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)' : ''}"><div><b>${esc(P[p].name)}</b> ${P[p].free ? '<span class="badge ok">tem plano grátis</span>' : '<span class="badge">pago por uso</span>'}${ia.keys[p] ? ` <span class="badge gold">chave salva</span>` : ''}${ia.provider === p && ia.keys[p] ? ' <span class="badge ok">em uso</span>' : ''}</div></button>`).join('')}</div></div>`;
@@ -4486,6 +4536,8 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       <div class="field" style="margin-top:10px"><label for="ia-key">Chave de API</label><div style="display:flex;gap:8px"><input id="ia-key" class="input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${key ? esc(maskKey(key)) + ' (salva)' : 'cole a chave aqui'}"><button class="btn ghost" style="flex:none;width:auto" data-act="pw-toggle" data-id="ia-key">ver</button></div></div>
       ${list.length ? `<div class="field"><label for="ia-model">Modelo</label><select id="ia-model" class="input" data-change="ia-model" data-p="${sel}">${list.slice(0, 30).map(m => `<option value="${esc(m)}" ${iaModel(sel) === m ? 'selected' : ''}>${esc(m)}${m === list[0] ? ' (indicado)' : ''}</option>`).join('')}</select>
         <div class="help">${sel === 'gemini' ? 'Os modelos "flash" estão no plano grátis. Os "pro" costumam ser pagos.' : sel === 'anthropic' ? 'O indicado é o mais preciso. Os "haiku" custam bem menos e costumam bastar para comprovantes legíveis.' : 'Os modelos "mini" custam bem menos e costumam bastar para comprovantes.'}</div></div>` : ''}
+      <div class="field"><label for="ia-rules">Regras extras para a IA (opcional)</label><textarea id="ia-rules" class="input" rows="2" maxlength="2000" placeholder="ex.: Pix para Maria Souza é aluguel. Compras na Drogasil são Saúde.">${esc(ia.rules || (ia.shared && ia.shared.rules) || '')}</textarea><div class="help">A IA já sabe ler valor, data, nome, banco, Pix, boleto, cupom fiscal e notinha. Use só para casos da sua família.</div></div>
+      ${syReady() && SY.state.role !== 'viewer' ? `<label class="check"><input type="checkbox" id="ia-share" checked><div><b>Compartilhar com todos do cofre</b><div class="small muted">Quem você convidou passa a ler comprovantes com esta chave. A chave vai criptografada pela sincronização; quem está no cofre consegue usá-la.</div></div></label>` : ''}
       <div id="ia-msg" class="small" style="margin:6px 0"></div>
       <div class="btn-row"><button class="btn" data-act="ia-save" data-p="${sel}">${key ? 'Testar de novo' : 'Salvar e testar'}</button>${key ? `<button class="btn secondary" data-act="ia-del" data-p="${sel}">${ic('trash')} Apagar chave</button>` : ''}</div>
       ${key && ia.provider !== sel ? `<button class="btn ghost" style="margin-top:8px" data-act="ia-use" data-p="${sel}">Usar ${esc(P[sel].name)} para ler comprovantes</button>` : ''}</div>
@@ -4496,6 +4548,8 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     return h;
   }
   async function iaSaveTest(p) {
+    const shareBox = document.getElementById('ia-share'), share = !!(shareBox && shareBox.checked);
+    const rulesEl = document.getElementById('ia-rules'); if (rulesEl) S.ia.rules = rulesEl.value.trim().slice(0, 2000);
     const inp = document.getElementById('ia-key'), msg = document.getElementById('ia-msg');
     const typed = (inp && inp.value || '').trim().replace(/\s+/g, '');
     const key = typed || S.ia.keys[p];
@@ -4510,8 +4564,10 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       const list = Leitor.pickModels(p, j);
       S.ia.keys[p] = key; S.ia.lists[p] = list; if (!S.ia.models[p] || list.indexOf(S.ia.models[p]) < 0) S.ia.models[p] = list[0] || Leitor.DEFAULT_MODEL[p];
       if (!S.ia.provider || !S.ia.keys[S.ia.provider]) S.ia.provider = p;
-      await iaSave(); S.iaPick = p; render();
-      toast(`Chave funcionando. ${S.ia.provider === p ? 'Já pode ler comprovantes.' : ''}`);
+      await iaSave(); S.iaPick = p;
+      if (share) await iaSetShared({ provider: p, key, model: S.ia.models[p], list: list.slice(0, 30), rules: S.ia.rules || '', by: (SY.state && SY.state.user && SY.state.user.email) || '', at: nowIso() });
+      render();
+      toast(share ? 'Chave funcionando e compartilhada com o cofre.' : `Chave funcionando. ${S.ia.provider === p ? 'Já pode ler comprovantes.' : ''}`);
     } catch (e) { say('Não consegui falar com ' + Leitor.PROVIDERS[p].art + ' ' + esc(Leitor.PROVIDERS[p].company) + '. Confira a internet. Detalhe: ' + esc(e.message), true); }
   }
 
@@ -4527,24 +4583,40 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       return { mime: 'image/jpeg', base64: toB64(new Uint8Array(await blob.arrayBuffer())) };
     } catch (e) { return { mime: file.type || 'image/jpeg', base64: toB64(new Uint8Array(await file.arrayBuffer())) }; }
   }
-  async function iaRead(fileData, text) {
-    const p = S.ia.provider, key = S.ia.keys[p], model = iaModel(p);
-    const rq = Leitor.readRequest(p, key, model, fileData, text);
-    const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
-    let res; try { res = await fetch(rq.url, Object.assign({ signal: ctl.signal }, rq.init)); }
-    catch (e) { throw new Error(e.name === 'AbortError' ? 'A IA demorou demais para responder. Tente de novo.' : 'Não consegui falar com ' + Leitor.PROVIDERS[p].art + ' ' + Leitor.PROVIDERS[p].company + '. Confira a internet.'); }
-    finally { clearTimeout(timer); }
-    let j = {}; try { j = await res.json(); } catch (e) { j = {}; }
-    if (!res.ok) throw new Error(Leitor.explainError(p, res.status, j));
-    const out = Leitor.responseText(p, j);
-    if (out.blocked && !out.text) throw new Error('A IA se recusou a ler esta imagem. Preencha à mão.');
-    return Leitor.fromAi(out.text);
+  // Lê com a IA em uso. Se ela estiver sobrecarregada, tenta de novo e depois outros modelos da mesma empresa.
+  async function iaRead(fileData, text, onStatus) {
+    const act = iaActive(), p = act.provider;
+    const models = [act.model].concat((act.list || []).filter(m => m !== act.model && !/pro|opus/.test(m) === !/pro|opus/.test(act.model))).slice(0, 3);
+    let lastErr = null;
+    for (let mi = 0; mi < models.length; mi++) {
+      for (let tent = 0; tent < 2; tent++) {
+        if (mi || tent) { if (onStatus) onStatus(`A IA está ocupada. Tentando de novo${mi ? ' com outro modelo' : ''}…`); await new Promise(r => setTimeout(r, 1200 + tent * 1500)); }
+        const rq = Leitor.readRequest(p, act.key, models[mi], fileData, text, { categories: C.CATEGORIES, rules: act.rules });
+        const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+        let res;
+        try { res = await fetch(rq.url, Object.assign({ signal: ctl.signal }, rq.init)); }
+        catch (e) { clearTimeout(timer); lastErr = new Error(e.name === 'AbortError' ? 'A IA demorou demais para responder.' : 'Não consegui falar com ' + Leitor.PROVIDERS[p].art + ' ' + Leitor.PROVIDERS[p].company + '. Confira a internet.'); continue; }
+        clearTimeout(timer);
+        let j = {}; try { j = await res.json(); } catch (e) { j = {}; }
+        if (res.ok) {
+          const out = Leitor.responseText(p, j);
+          if (out.blocked && !out.text) throw new Error('A IA se recusou a ler esta imagem.');
+          return Leitor.fromAi(out.text, C.CATEGORIES);
+        }
+        lastErr = new Error(Leitor.explainError(p, res.status, j));
+        const transient = res.status >= 500 || res.status === 429 || res.status === 408;
+        if (res.status === 404) break; // modelo não existe: vai para o próximo
+        if (!transient) throw lastErr; // chave errada, sem crédito…: não adianta repetir
+        if (res.status === 429 && /day|dia|daily|PerDay/i.test(JSON.stringify(j))) throw lastErr; // cota do dia acabou
+      }
+    }
+    throw lastErr || new Error('A IA não respondeu.');
   }
   async function iaConfirmSend(isPdfText) {
     if (S.ia.noWarn) return true;
-    const P = Leitor.PROVIDERS[S.ia.provider];
+    const P = Leitor.PROVIDERS[iaActive().provider];
     return confirmDialog({ title: 'Enviar para a IA?', ok: 'Enviar e ler', cancel: 'Não enviar',
-      text: `${isPdfText ? 'O texto deste comprovante' : 'A imagem deste comprovante'} vai sair do aparelho e ser lida pela <b>${esc(P.name)}</b>. Ela vai ver o que está nele (nomes, valores, banco).<br><br><span class="small muted">${IA_PRIVACY[S.ia.provider]}</span><br><br><span class="small muted">Para não ver este aviso, desligue em Mais → Leitor de comprovantes.</span>` });
+      text: `${isPdfText ? 'O texto deste comprovante' : 'A imagem deste comprovante'} vai sair do aparelho e ser lida pela <b>${esc(P.name)}</b>. Ela vai ver o que está nele (nomes, valores, banco).<br><br><span class="small muted">${IA_PRIVACY[iaActive().provider]}</span><br><br><span class="small muted">Para não ver este aviso, desligue em Mais → Leitor de comprovantes.</span>` });
   }
   function busySheet(text) { return openSheet({ title: 'Lendo comprovante', sticky: true, foot: false, body: `<div style="display:flex;align-items:center;gap:12px;padding:14px 4px 20px"><div class="spinner" aria-hidden="true" style="width:22px;height:22px;border-radius:50%;border:3px solid var(--accent-soft);border-top-color:var(--accent);animation:spin 0.9s linear infinite"></div><div>${text}</div></div>` }); }
 
@@ -4577,17 +4649,19 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     }
     const pdfText = isPdf && text.length > 40 ? text : '';
     if (!(await iaConfirmSend(!!pdfText))) return receiptToWizard(local && (local.amount != null || local.date) ? local : null, file, local && (local.amount != null || local.date) ? 'aparelho' : null);
-    const P = Leitor.PROVIDERS[S.ia.provider];
-    const sh = busySheet(`Enviando para ${esc(P.name)}…<div class="small muted">Leva alguns segundos.</div>`);
+    const P = Leitor.PROVIDERS[iaActive().provider];
+    const sh = busySheet(`<span id="ia-busy">Enviando para ${esc(P.name)}…</span><div class="small muted">Leva alguns segundos.</div>`);
     let r;
     try {
       // PDF com texto: manda só o texto (menos dados). Foto ou PDF sem texto: manda o arquivo.
       const data = pdfText ? null : isPdf ? { mime: 'application/pdf', base64: toB64(new Uint8Array(await file.arrayBuffer())) } : await shrinkImage(file);
-      r = await iaRead(data, pdfText);
+      r = await iaRead(data, pdfText, t => { const el = document.getElementById('ia-busy'); if (el) el.textContent = t; });
     } catch (e) {
+      // A IA falhou: segue direto para as perguntas, com o comprovante anexado (e o que o aparelho conseguiu ler).
       sh.close();
-      const again = await confirmDialog({ title: 'A IA não conseguiu ler', text: esc(e.message) + '<br><br>Você pode preencher à mão: o comprovante continua anexado.', ok: 'Preencher à mão', cancel: 'Cancelar' });
-      if (again) receiptToWizard(local && (local.amount != null || local.date) ? local : null, file, local ? 'aparelho' : null);
+      const partial = local && (local.amount != null || local.date) ? local : null;
+      receiptToWizard(partial, file, partial ? 'aparelho' : null);
+      toast('A IA não conseguiu ler agora (' + e.message.replace(/<[^>]+>/g, '').slice(0, 140) + '). Preencha nas perguntas: o comprovante já está anexado.', null, null, 9000);
       return;
     }
     sh.close();
@@ -4604,8 +4678,9 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       if (r.amount != null) preset.amount = r.amount;
       if (r.date) preset.date = r.date;
       if (r.description) preset.description = r.description.slice(0, 80);
-      preset.notes = ['Lido do comprovante' + (source && source !== 'aparelho' ? ' pela IA (' + source + ')' : ''), r.methodLabel, r.bank ? 'banco: ' + r.bank : ''].filter(Boolean).join(' · ');
+      preset.notes = ['Lido do comprovante' + (source && source !== 'aparelho' ? ' pela IA (' + source + ')' : ''), r.docLabel, r.methodLabel, r.bank ? 'banco: ' + r.bank : ''].filter(Boolean).join(' · ');
       if (preset.type === 'despesa' && preset.description) { const c = Classify.classify(preset.description); if (c) { preset.category = c.category; preset.category_auto = c.keyword; } }
+      if (preset.type === 'despesa' && r.category) { preset.category = r.category; preset.category_auto = 'leitura do comprovante'; }
       preset.receipt = r;
     }
     openTxWizard(preset);
@@ -4869,7 +4944,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     // ---- grupos ----
     h += group('Ferramentas', [
       row('docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'),
-      row('leitor', 'scan', 'Leitor de comprovantes', S.ia && iaReady() ? 'lendo fotos com ' + esc(Leitor.PROVIDERS[S.ia.provider].name) : 'PDF no aparelho · fotos com IA (opcional)'),
+      row('leitor', 'scan', 'Leitor de comprovantes', S.ia && iaReady() ? 'lendo fotos com ' + esc(Leitor.PROVIDERS[iaActive().provider].name) + (iaActive().source === 'familia' ? ' (chave da família)' : '') : 'PDF no aparelho · fotos com IA (opcional)'),
       row('relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'),
       row('agenda', 'cal', 'Agenda', 'calendário e linha do tempo'),
       row('planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber'),
@@ -5640,7 +5715,10 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
         }
         // 2) juntar com o que está neste aparelho
         const cur = S.ds;
-        const m = await Sync.merge(cur || {}, st.base || {}, remote);
+        await iaLoad();
+        const iaBefore = JSON.stringify(S.ia.shared || null);
+        const withIa = Object.assign({}, cur || {}); if (S.ia.shared) withIa[IA_SYNC_KEY] = S.ia.shared; // chave da IA da família (fica fora de S.ds)
+        const m = await Sync.merge(withIa, st.base || {}, remote);
         // 3) enviar o que mudou aqui (quem é "só vê" não envia)
         if (S.ds !== cur) { syLater(1500); return; } // você editou durante a sincronização: refaz em seguida
         const p = st.role === 'viewer' ? { ups: [], dels: [] } : await Sync.plan(m.ds, m.base);
@@ -5653,6 +5731,11 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
         for (let i = 0; i < rows.length; i += 200) await rest('records?on_conflict=vault_id,rid', { method: 'POST', body: rows.slice(i, i + 200), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
         for (const u of p.ups) m.base[u.payload.key] = u.hash;
         for (const d of p.dels) delete m.base[d.payload.key];
+        const iaNew = m.ds[IA_SYNC_KEY] || null; delete m.ds[IA_SYNC_KEY];
+        const iaChanged = JSON.stringify(iaNew) !== iaBefore;
+        if (iaChanged && JSON.stringify(S.ia.shared || null) === iaBefore) { S.ia.shared = iaNew; await iaSave(); }
+        m.appliedList = m.appliedList.filter(x => x.key !== '@' + IA_SYNC_KEY); m.applied = m.appliedList.length;
+        m.conflicts = m.conflicts.filter(x => x.key !== '@' + IA_SYNC_KEY);
         // 4) gravar neste aparelho o que veio de fora
         if (m.applied) {
           let fin = m.ds;
@@ -5664,7 +5747,7 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
         Object.assign(st, { base: m.base, cursor, last_sync_at: nowIso(), last_error: null, bad_records: bad, last_sent: rows.length, last_received: m.applied });
         if (m.conflicts.length) st.conflicts = (st.conflicts || []).concat(m.conflicts).slice(-50);
         await sySave();
-        if (m.applied || S.page === 'sync') render();
+        if (m.applied || S.page === 'sync' || (iaChanged && S.page === 'leitor')) render();
         if (manual) { document.querySelectorAll('.toast').forEach(t => t.remove()); toast(`Sincronizado · ${m.applied} recebido(s), ${rows.length} enviado(s)`); }
         else if (m.applied) toast(`${m.applied} alteração(ões) recebida(s) de outro aparelho`);
       } catch (e) {
@@ -5877,6 +5960,10 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       }
       render();
       await syRun(true);
+      if (S.afterLogin === 'import') {
+        S.afterLogin = null; go('inicio');
+        toast(S.ds ? 'Sua conta já tinha dados. Para importar um backup mesmo assim: Mais → Backup e restauração.' : 'Conta pronta. Agora toque em Importar backup JSON.', null, null, 7000);
+      }
     } catch (e) {
       document.querySelectorAll('.toast').forEach(t => t.remove());
       err(e.friendly ? e.message : 'Erro inesperado: ' + (e && e.message));
@@ -6636,6 +6723,10 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
       await iaSave(); render(); toast('Chave apagada deste aparelho');
     },
     'ia-warn': async el => { S.ia.noWarn = !el.checked; await iaSave(); },
+    'ia-unshare': async () => {
+      if (!(await confirmDialog({ title: 'Parar de compartilhar a chave?', text: 'Quem está no cofre deixa de ler fotos com esta chave (cada um pode configurar a sua). Se quiser impedir de vez o uso, apague a chave também no site da empresa da IA.', ok: 'Parar de compartilhar', danger: true }))) return;
+      await iaSetShared(null); render(); toast('Chave não é mais compartilhada');
+    },
     'sy-go': () => syGo(),
     'sy-mode': el => { const e = document.getElementById('sy-email'); if (e) S.syEmail = e.value; S.syMode = el.dataset.mode || (S.syMode === 'signup' ? 'login' : 'signup'); S.syLinkMsg = null; render(); },
     'pw-toggle': el => { const i = document.getElementById(el.dataset.id); if (!i) return; const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'esconder' : 'mostrar'; },
@@ -6671,6 +6762,12 @@ Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de aute
     'fx-unfix': el => unfixRate(el.dataset.cur),
     'fx-toggle': el => toggleAutoRates(el.checked),
     'fresh': () => startFresh(),
+    'import-welcome': async () => {
+      if (syReady()) return startImport();
+      const conta = await confirmDialog({ title: 'Guardar na sua conta?', text: 'Com uma conta, seus dados ficam <b>criptografados na nuvem</b>: aparecem nos seus outros aparelhos e você pode convidar a família.<br><br>Sem conta, ficam só neste celular.', ok: 'Criar conta ou entrar', cancel: 'Só neste aparelho' });
+      if (conta) { S.afterLogin = 'import'; S.syMode = 'signup'; go('mais', 'sync'); return; }
+      startImport();
+    },
     'debt-new': () => openDebtWizard(),
     'sw-check': async () => {
       if (!swReg) { toast('Atualização automática indisponível neste navegador'); return; }
