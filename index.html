@@ -7,9 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Cofre">
-<meta name="theme-color" content="#F3F4F7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0A0E13" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-tjg53fSJtN8buzEDLz0SPkQ2fNFcXfmSMDSTKLT6YjU='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XAB6NpUqP309gXzSDjvdPBIYger9Zckemgw9s6w5VCg='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -285,6 +285,74 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 .askbar .input { flex: 1; padding: 11px 13px; }
 .askbar .btn { width: 48px; padding: 0; flex: none; }
 
+
+/* ================= visual com vidro (estilo "Liquid Glass") =================
+   Fundo com manchas de cor suaves; cartões, barra de abas e folhas de vidro (desfoque do navegador).
+   Sem suporte a desfoque ou com "reduzir transparência": cartões sólidos, mesma leitura. */
+:root {
+  --bg: #E7F1EE; --glass: rgba(255, 255, 255, .64); --glass-strong: rgba(255, 255, 255, .8); --glass-field: rgba(255, 255, 255, .55);
+  --glass-edge: rgba(255, 255, 255, .85); --glass-shade: 0 8px 26px rgba(16, 60, 64, .10); --glass-hi: rgba(255, 255, 255, .55);
+  --blob1: #A6E3D6; --blob2: #F6DCA4; --blob3: #74C6B9; --card-2: rgba(255, 255, 255, .5); --line: rgba(14, 26, 34, .09);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #061015; --glass: rgba(20, 31, 37, .58); --glass-strong: rgba(17, 27, 33, .82); --glass-field: rgba(255, 255, 255, .06);
+    --glass-edge: rgba(255, 255, 255, .10); --glass-shade: 0 10px 30px rgba(0, 0, 0, .40); --glass-hi: rgba(255, 255, 255, .10);
+    --blob1: #0E5A53; --blob2: #5E4516; --blob3: #0F3644; --card-2: rgba(255, 255, 255, .06); --line: rgba(255, 255, 255, .08);
+  }
+}
+html { background: var(--bg); }
+body { background: transparent; }
+body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-events: none;
+  background: radial-gradient(38% 30% at 8% 4%, var(--blob1), transparent 72%), radial-gradient(34% 28% at 98% 38%, var(--blob2), transparent 72%),
+    radial-gradient(46% 36% at 18% 100%, var(--blob3), transparent 72%), var(--bg); }
+.card, .stat, .icon-btn, .tabbar, .hero, .sheet, .askbar .input {
+  -webkit-backdrop-filter: blur(18px) saturate(165%); backdrop-filter: blur(18px) saturate(165%); }
+.card, .stat, .icon-btn { background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shade), inset 0 1px 0 var(--glass-hi); }
+.card { border-radius: 22px; }
+.input, select.input, textarea.input { background: var(--glass-field); border-color: var(--glass-edge); }
+.row-item .ico { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+/* cartão do patrimônio: vidro com leve tom do verde do Cofre */
+.hero { background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 16%, var(--glass)), var(--glass)); color: var(--ink);
+  border: 1px solid var(--glass-edge); box-shadow: var(--glass-shade), inset 0 1px 0 var(--glass-hi); border-radius: 26px; }
+.hero::after { display: none; }
+.hero .label, .hero .foot { color: var(--ink-2); opacity: 1; }
+.hero .pill { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+.hero .pill .k { color: var(--ink-2); opacity: 1; }
+/* botões: o principal ganha brilho; os secundários são de vidro */
+.btn:not(.secondary):not(.ghost):not(.danger) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 32%, transparent), inset 0 1px 0 rgba(255, 255, 255, .35); }
+.btn.secondary { background: var(--glass-field); border: 1px solid var(--glass-edge); }
+/* barra de abas flutuante, em pílula */
+.tabbar { left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 10px); max-width: 600px; margin: 0 auto; padding-bottom: 0;
+  border-radius: 32px; border: 1px solid var(--glass-edge); background: var(--glass-strong); box-shadow: 0 12px 34px rgba(8, 40, 44, .18), inset 0 1px 0 var(--glass-hi); }
+.tabbar nav { height: 62px; padding: 0 6px; }
+.tabbar button.on::before { content: ""; position: absolute; inset: 7px 4px; border-radius: 24px; background: color-mix(in srgb, var(--accent) 14%, transparent); z-index: -1; }
+.tabbar button { isolation: isolate; }
+#app { padding-bottom: calc(62px + env(safe-area-inset-bottom) + 40px); }
+.fab { bottom: calc(62px + env(safe-area-inset-bottom) + 24px); }
+.askbar { bottom: calc(62px + env(safe-area-inset-bottom) + 16px); background: transparent; border: 0; }
+.askbar .input { background: var(--glass-strong); }
+/* folhas (janelas que sobem): vidro forte */
+.sheet { background: var(--glass-strong); border: 1px solid var(--glass-edge); border-bottom: 0; }
+.sheet-foot { background: transparent; border-top-color: var(--line); }
+/* marca: tela de boas-vindas e tela de entrar */
+.brand { display: grid; justify-items: center; gap: 8px; text-align: center; margin: 18px 0 20px; }
+.brand .ic { width: 84px; height: 84px; border-radius: 22px; overflow: hidden; box-shadow: 0 12px 30px rgba(6, 40, 44, .28); }
+.brand .ic svg { width: 100%; height: 100%; display: block; }
+.brand .nm { font-size: 34px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05; margin-top: 6px; }
+.brand .tg { color: var(--ink-2); font-size: 15px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 16px; background: var(--glass-field); border: 1px solid var(--glass-edge); margin-bottom: 14px; }
+.seg button { border: 0; background: transparent; padding: 9px 0; border-radius: 12px; font-weight: 600; font-size: 14px; color: var(--ink-2); }
+.seg button.on { background: var(--glass-strong); color: var(--ink); box-shadow: 0 2px 8px rgba(8, 40, 44, .12), inset 0 1px 0 var(--glass-hi); }
+.trust { display: flex; gap: 8px; align-items: center; justify-content: center; font-size: 13px; color: var(--ink-2); margin: 8px 0 4px; }
+.trust svg { width: 15px; height: 15px; flex: none; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: #fff; --glass-strong: #fff; } .card, .hero, .tabbar, .sheet { background: #fff; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card, .stat, .icon-btn, .tabbar, .hero, .sheet { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--glass-strong); }
+}
 </style>
 </head>
 <body>
@@ -2977,13 +3045,23 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
   // ---------- boas-vindas ----------
   function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
   function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  // Logo do Cofre (A3 · cifrão no segredo). Também é a fonte dos ícones PNG do app.
+  function logoSvg() {
+    const ticks = Array.from({ length: 12 }, (_, i) => { const a = i / 12 * Math.PI * 2; return `<line x1="${(50 + 22.5 * Math.cos(a)).toFixed(1)}" y1="${(50 + 22.5 * Math.sin(a)).toFixed(1)}" x2="${(50 + 25.5 * Math.cos(a)).toFixed(1)}" y2="${(50 + 25.5 * Math.sin(a)).toFixed(1)}"/>`; }).join('');
+    return `<svg viewBox="0 0 100 100" role="img" aria-label="Cofre"><defs><linearGradient id="lgBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A2E3B"/><stop offset="1" stop-color="#0B6E69"/></linearGradient>
+      <linearGradient id="lgGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F6D98F"/><stop offset="1" stop-color="#C99A3A"/></linearGradient></defs>
+      <rect width="100" height="100" fill="url(#lgBg)"/><rect x="22" y="20" width="56" height="60" rx="11" fill="rgba(255,255,255,.09)" stroke="rgba(255,255,255,.9)" stroke-width="4"/>
+      <rect x="17" y="33.2" width="6" height="10" rx="3" fill="rgba(255,255,255,.9)"/><rect x="17" y="57.2" width="6" height="10" rx="3" fill="rgba(255,255,255,.9)"/>
+      <circle cx="50" cy="50" r="18" fill="rgba(0,0,0,.18)" stroke="url(#lgGold)" stroke-width="4.5"/><g stroke="url(#lgGold)" stroke-width="2.6" stroke-linecap="round">${ticks}</g>
+      <text x="50" y="58.5" text-anchor="middle" font-size="25" font-weight="800" fill="url(#lgGold)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">$</text></svg>`;
+  }
+  function brandBlock(tagline) {
+    return `<div class="brand"><div class="ic">${logoSvg()}</div><div class="nm">Cofre</div><div class="tg">${esc(tagline || 'Suas finanças, só suas.')}</div></div>`;
+  }
   function viewWelcome() {
     const needsInstall = isIOS() && !isStandalone();
-    return `<div class="welcome">
-      <img class="logo" src="apple-touch-icon.png" alt="">
-      <h1>Cofre Financeiro</h1>
-      <p class="muted" style="margin:0 0 22px">Seu banco de dados financeiro familiar, guardado só neste aparelho e funcionando sem internet.</p>
-    </div>
+    return brandBlock('Suas finanças, só suas.') + `<p class="muted" style="text-align:center;margin:-8px auto 22px;max-width:34ch">Contas, saldos e reservas da família, em qualquer moeda. Funciona sem internet.</p>`
+    + `
     ${needsInstall ? `<div class="notice info">${ic('info')}<div class="ntext"><b>Instale antes de importar.</b> Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra o app pelo ícone e importe lá dentro. Os dados do Safari e do app instalado ficam em lugares separados.</div></div>` : ''}
     <div class="notice warn">${ic('alert')}<div class="ntext">${WARNING_TEXT}</div></div>
     <button class="btn" data-act="fresh">${ic('plus')} Começar do zero</button>
@@ -4556,15 +4634,16 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
           <div id="sy-err" class="small" style="color:var(--danger)"></div>
           <button class="btn" data-act="sy-forgot-send">Enviar link</button>
           <button class="btn ghost" data-act="sy-mode" data-mode="login">Voltar para entrar</button></div>`;
-      h += `<div class="card"><div class="lbl">${sign ? 'Criar conta' : 'Entrar'}</div>
-          <p class="small muted" style="margin:4px 0 12px">${sign ? 'Para usar o Cofre no celular e no computador, ou com outra pessoa.' : 'Use o mesmo e-mail e senha dos seus outros aparelhos.'}</p>
+      h = h.replace(/<h1 class="page-title">[\s\S]*?<\/h1>/, '') + brandBlock(sign ? 'Crie sua conta para usar em qualquer aparelho.' : 'Entre para ver seus dados em qualquer aparelho.');
+      h += `<div class="card">
+          <div class="seg" role="tablist"><button role="tab" aria-selected="${!sign}" class="${sign ? '' : 'on'}" data-act="sy-mode" data-mode="login">Entrar</button><button role="tab" aria-selected="${sign}" class="${sign ? 'on' : ''}" data-act="sy-mode" data-mode="signup">Criar conta</button></div>
           <div class="field"><label for="sy-email">E-mail</label><input class="input" id="sy-email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${email}"></div>
           ${pwField('sy-pw', 'Senha', sign ? 'new-password' : 'current-password')}
           ${sign ? '<p class="help" style="margin-top:-6px">Pelo menos 8 caracteres.</p>' : ''}
           <div id="sy-err" class="small" style="color:var(--danger)"></div>
           <button class="btn" data-act="sy-go">${sign ? 'Criar conta' : 'Entrar'}</button>
-          ${sign ? '' : '<button class="btn ghost" data-act="sy-mode" data-mode="forgot">Esqueci minha senha</button>'}
-          <button class="btn ghost" data-act="sy-mode" data-mode="${sign ? 'login' : 'signup'}">${sign ? 'Já tenho conta' : 'Criar conta'}</button></div>
+          ${sign ? '' : '<button class="btn ghost" data-act="sy-mode" data-mode="forgot">Esqueci minha senha</button>'}</div>
+        <div class="trust">${ic('lock')}<span>Criptografado no seu aparelho. Nem o servidor lê.</span></div>
         <details class="card fold"><summary class="small">Como meus dados ficam protegidos?</summary><ul class="small" style="padding-left:18px;margin:10px 0 0;display:grid;gap:6px">
           <li>Tudo é <b>embaralhado neste aparelho</b> antes de sair. O servidor guarda, mas não consegue ler valores, contas nem descrições. Nem o dono do app.</li>
           <li>Sua senha não vai para o servidor: vai só uma prova derivada dela.</li>
