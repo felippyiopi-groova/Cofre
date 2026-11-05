@@ -69,8 +69,10 @@ test('8) simulação "e se eu guardar" não altera os dados e mostra a mudança 
 test('10) verde exige dados suficientes', () => {
   const sem = dados({ saldo: 3000 }); sem.accounts[0].snapshot_balance = null;
   assert.equal(C.trafficLight(sem, HOJE).level, 'DADOS INSUFICIENTES');
-  const semData = dados({ saldo: 3000, pagar: [[100, null]] });
-  assert.equal(C.trafficLight(semData, HOJE).level, 'DADOS INSUFICIENTES');
+  // conta sem data: não fica verde e diz o que falta (com a conta e o valor)
+  const semData = dados({ saldo: 3000, pagar: [[100, null]] }), tsd = C.trafficLight(semData, HOJE);
+  assert.equal(tsd.level, 'AMARELO'); assert.equal(tsd.projected, 'AMARELO');
+  const r = tsd.reasons.find(x => x.code === 'dados_incompletos'); assert.equal(r.undated.length, 1); assert.equal(r.undated_total, 100);
   // risco continua aparecendo mesmo com dados incompletos
   const risco = dados({ saldo: 100, pagar: [[500, AMANHA], [10, null]] });
   assert.equal(C.trafficLight(risco, HOJE).level, 'VERMELHO');

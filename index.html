@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ND0eiYZpNMfWq7GSw2Eqr38Ya/x/6aNkru2KG8eeHck='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-NcxGyT8tnTYQe2zZf/PEo8iqxjUjqbHUHWXWYbmxnRA='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -1236,11 +1236,11 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const saveNow = round2(num(opts.save) || 0); // simulação "e se eu guardar": não altera os dados
     const free = round2((s.freeMain || 0) - saveNow), reserve = round2((s.protectedMain || 0) + saveNow);
     const ev = []; // { date, amount (+ entra / − sai), name, kind, essential, overdue }
-    let noDate = 0, noRate = 0, uncertainSkipped = 0;
+    let noDate = 0, noRate = 0, uncertainSkipped = 0; const undated = [];
     for (const o of (ds.obligations || [])) {
       if (!isObj(o) || !isObligationOpen(o)) continue;
       const v = toMain(openAmountOf(o), currencyOf(o, ds), ds); if (v === null || isNaN(v) || v <= 0) { if (v === null) noRate++; continue; }
-      const d = dateOnly(o.due_date); if (!d) { noDate++; continue; }
+      const d = dateOnly(o.due_date); if (!d) { noDate++; undated.push({ id: idOf(o), name: o.name || o.description || displayName(idOf(o)) || 'Conta a pagar', amount: round2(v), essential: isEssential(o) }); continue; }
       if (d > end) continue;
       ev.push({ date: d < today ? today : d, due: d, amount: -round2(v), name: o.name || o.description || displayName(idOf(o)) || 'Conta a pagar', kind: 'conta', essential: isEssential(o), overdue: d < today });
     }
@@ -1305,6 +1305,9 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     else if (overdue.length) reasons.push({ sev: 'AMARELO', code: 'vencida', items: overdue.map(e => ({ name: e.name, amount: -e.amount, due: e.due, essential: e.essential })), amount: round2(-overdue.reduce((a, e) => a + e.amount, 0)) });
     if (reserveMin > 0 && reserve < reserveMin) reasons.push({ sev: 'AMARELO', code: 'reserva_baixa', reserve, reserve_min: reserveMin, missing: round2(reserveMin - reserve), auto: P.reserve_min == null });
     if (!firstNeg && margin > 0 && minBal < margin) reasons.push({ sev: 'AMARELO', code: 'sobra_pequena', min_balance: minBal, min_date: minDate, margin });
+    // Dados incompletos: nunca deixa verde. Vira um motivo de ATENÇÃO, dizendo o que falta (dá para corrigir).
+    if (partial.length && freeAccs.some(b => b.balance !== null)) reasons.push({ sev: 'AMARELO', code: 'dados_incompletos', undated, undated_total: round2(undated.reduce((a, x) => a + x.amount, 0)),
+      unknown_accounts: s.unknownAccounts.map(b => b.name || b.id), no_rate: !!(s.missingRates.length || noRate), missing_rates: s.missingRates.slice() });
     const sevOf = list => list.some(r => r.sev === 'VERMELHO') ? 'VERMELHO' : list.some(r => r.sev === 'AMARELO') ? 'AMARELO' : 'VERDE';
     let level = sevOf(reasons);
     // Projetada: saldo no fim do horizonte (entradas e saídas já feitas).
@@ -1312,10 +1315,10 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     if (endBal < 0) projReasons.push({ sev: 'VERMELHO' });
     if (reserveMin > 0 && reserve < reserveMin) projReasons.push({ sev: 'AMARELO' });
     if (endBal >= 0 && margin > 0 && endBal < margin) projReasons.push({ sev: 'AMARELO' });
+    if (partial.length) projReasons.push({ sev: 'AMARELO' });
     let projected = sevOf(projReasons);
     const noBase = !freeAccs.some(b => b.balance !== null); // sem saldo do dia a dia não dá para avaliar nada
-    if (noBase || (insufficient && level === 'VERDE')) level = 'DADOS INSUFICIENTES';
-    if (noBase || (insufficient && projected === 'VERDE')) projected = 'DADOS INSUFICIENTES';
+    if (noBase) { level = 'DADOS INSUFICIENTES'; projected = 'DADOS INSUFICIENTES'; }
     // Quanto dá para guardar hoje sem faltar dinheiro em nenhum dia (mantendo a margem).
     const canSave = Math.max(0, round2(minBal - margin));
     return { level, projected, reasons, currency: main, today, end, policy: P, free, reserve, reserveMin, margin, avgMonthly: avg, months: ms.length,
@@ -2710,9 +2713,8 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
         const D = d => d === today ? 'hoje' : fd(d);
         const why = r => r.code === 'falta_caixa' ? `Você terá ${M(r.available)}, mas ${r.name} de ${M(r.amount)} vence ${D(r.date)}: faltam ${M(r.missing)}.` + (r.next_income ? ` Próximo recebimento: ${r.next_income.name} (${M(r.next_income.amount)}) em ${fd(r.next_income.date)}.` : '')
           : r.code === 'vencida_sem_dinheiro' ? `Conta essencial vencida sem dinheiro: faltam ${M(r.missing)}.` : r.code === 'vencida' ? `Há conta vencida (${M(r.amount)}): pague o quanto antes.`
-          : r.code === 'reserva_baixa' ? `Reserva de ${M(r.reserve)}, abaixo do mínimo de ${M(r.reserve_min)}.` : r.code === 'sobra_pequena' ? `No dia mais apertado (${fd(r.min_date)}) sobram só ${M(r.min_balance)}.` : '';
+          : r.code === 'reserva_baixa' ? `Reserva de ${M(r.reserve)}, abaixo do mínimo de ${M(r.reserve_min)}.` : r.code === 'dados_incompletos' ? 'Faltam dados: ' + [r.undated.length && `${r.undated.length} conta(s) sem data de vencimento (${M(r.undated_total)})`, r.unknown_accounts.length && 'conta(s) sem saldo: ' + r.unknown_accounts.join(', '), r.no_rate && 'falta cotação'].filter(Boolean).join('; ') + '.' : r.code === 'sobra_pequena' ? `No dia mais apertado (${fd(r.min_date)}) sobram só ${M(r.min_balance)}.` : '';
         const notes = tl.reasons.map(why).filter(Boolean);
-        if (tl.partial.length) notes.push('Dados incompletos: ' + tl.partial.join(', ') + '.');
         if (q.save > 0) { const sim = C.trafficLight(ds, today, { save: q.save }); notes.unshift(`Se guardar ${M(q.save)} hoje: agora ${sim.level}, em ${sim.policy.horizon_days} dias ${sim.projected}${sim.level !== tl.level ? ' (muda de ' + tl.level + ')' : ' (não muda)'}. É só simulação: nada foi alterado.`); }
         if (tl.level === 'VERMELHO') notes.push(`Para sair do vermelho: cubra ${M(Math.max(0, -tl.minBalance))} até ${fd(tl.minDate)} (adiar, negociar ou antecipar uma entrada).`);
         const next = tl.events.filter(e => e.amount < 0).slice().sort((x, y) => (x.overdue === y.overdue ? 0 : x.overdue ? -1 : 1) || (x.date < y.date ? -1 : 1) || ((y.essential ? 1 : 0) - (x.essential ? 1 : 0))).slice(0, q.first ? 6 : 3);
@@ -5389,6 +5391,13 @@ REGRAS
     if (r.code === 'vencida_sem_dinheiro') return `Conta essencial <b>vencida</b>: ${r.items.map(i => `${esc(i.name)} (${M2(i.amount)}, venceu ${fdate(i.due)})`).join(', ')}. Disponível: ${M2(r.available)}. <b>Faltam ${M2(r.missing)}</b>.`;
     if (r.code === 'vencida') return `Conta vencida: ${r.items.map(i => `${esc(i.name)} (${M2(i.amount)}, venceu ${fdate(i.due)})`).join(', ')}. Há dinheiro para ela: pague o quanto antes.`;
     if (r.code === 'reserva_baixa') return `Reserva de ${M2(r.reserve)}, abaixo do mínimo de ${M2(r.reserve_min)}${r.auto ? ' (1 mês de gasto médio)' : ''}. Faltam ${M2(r.missing)} para a reserva.`;
+    if (r.code === 'dados_incompletos') {
+      const parts = [];
+      if (r.undated.length) parts.push(`<b>${r.undated.length} conta(s) a pagar sem data de vencimento</b> (${M2(r.undated_total)} no total): sem a data, o app não sabe em que dia o dinheiro sai. Toque para informar:<div class="chips" style="flex-wrap:wrap;margin-top:6px">${r.undated.slice(0, 12).map(x => `<button class="chip" data-act="obligation" data-id="${esc(x.id)}">${esc(x.name)} · ${M2(x.amount)}</button>`).join('')}</div>`);
+      if (r.unknown_accounts.length) parts.push(`Conta(s) sem saldo informado: <b>${esc(r.unknown_accounts.join(', '))}</b>.`);
+      if (r.no_rate) parts.push(`Falta cotação${r.missing_rates.length ? ' de ' + esc(r.missing_rates.join(', ')) : ''} para converter alguns valores.`);
+      return 'Faltam dados, por isso não fica verde. ' + parts.join(' ');
+    }
     if (r.code === 'sobra_pequena') return `No dia mais apertado (${fdate(r.min_date)}), sobram só ${M2(r.min_balance)}, menos que a margem de segurança de ${M2(r.margin)}.`;
     return '';
   }
@@ -5408,7 +5417,7 @@ REGRAS
         ${save ? `<div class="notice info">${ic('info')}<div class="ntext small"><b>Simulação:</b> guardando ${esc(money(save, MC))} hoje. Nada foi alterado nos seus dados.</div></div>` : ''}
         ${tl.reasons.length ? `<div class="card" style="margin:0 0 12px"><div class="lbl">Por quê</div><ul class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">${tl.reasons.map(r => `<li><b style="color:${r.sev === 'VERMELHO' ? 'var(--danger)' : 'var(--warn)'}">${r.sev === 'VERMELHO' ? 'Risco' : 'Atenção'}:</b> ${tlReasonText(r, MC)}</li>`).join('')}</ul></div>`
           : `<p class="small" style="margin:0 0 12px">${/DADOS/.test(tl.level) ? '' : `Todas as contas dos próximos ${P.horizon_days} dias estão cobertas nas datas certas, a reserva está no mínimo e sobra margem.`}</p>`}
-        ${tl.partial.length ? `<div class="notice warn">${ic('alert')}<div class="ntext small"><b>Dados incompletos:</b> ${esc(tl.partial.join(', '))}. Por isso o app não mostra verde.</div></div>` : ''}
+        ${/DADOS/.test(tl.level) ? `<div class="notice warn">${ic('alert')}<div class="ntext small"><b>Sem saldo das contas do dia a dia</b>: informe o saldo de pelo menos uma conta para o app calcular.</div></div>` : ''}
         <div class="card" style="margin:0 0 12px"><dl class="kv">
           ${row('Disponível em conta', M(tl.free, MC))}
           ${row(`Contas a pagar em ${P.horizon_days} dias`, '− ' + M(tl.due, MC) + (tl.overdue ? ` <span class="badge danger">${tl.overdue} vencida(s)</span>` : ''))}
