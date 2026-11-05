@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Cofre">
 <meta name="theme-color" content="#E7F1EE" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#061015" media="(prefers-color-scheme: dark)">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-mVr14YGpSsEQ+oaI3dng9VBHdsDg5f62ASu6ms9T41g='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-48arCIUF+s/AMTQHnx2HFUsrnnY40MCICtUgVvNAIhw='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com https://rahpgtuaxbxdtjjohubi.supabase.co https://cdn.jsdelivr.net https://latest.currency-api.pages.dev https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>Cofre Financeiro</title>
@@ -267,6 +267,7 @@ details.fold[open] > summary::after { transform: rotate(90deg); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
+@keyframes spin { to { transform: rotate(360deg); } }
 /* ações rápidas estilo banco */
 .quick { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 0 0 14px; }
 .quick button { border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); padding: 4px 0; }
@@ -2503,6 +2504,426 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
   if (node) module.exports = api; else root.Nlp = api;
 })(typeof self !== 'undefined' ? self : this);
 
+/* Leitor de comprovantes. Duas partes, sem bibliotecas:
+   1) No aparelho: tira o texto de PDFs (comprovantes de banco quase sempre são PDF com texto)
+      e encontra valor, data, tipo (Pix, boleto, TED…) e quem recebeu/pagou.
+   2) Com IA (opcional, chave da própria pessoa): monta o pedido para Gemini, ChatGPT ou Claude
+      e lê a resposta. A chamada em si é feita pela interface, direto do aparelho para a empresa da IA. */
+(function (root) {
+  'use strict';
+  const latin1 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192)); return s; };
+  const fromLatin1 = s => { const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 255; return u; };
+  const W1252 = (() => { try { return new TextDecoder('windows-1252'); } catch (e) { return null; } })();
+  const decodeBytes = s => W1252 ? W1252.decode(fromLatin1(s)) : s;
+
+  // Descompacta FlateDecode. Se o fim vier com lixo, fica com o que já saiu.
+  async function inflate(bin) {
+    const DS = root.DecompressionStream || (typeof DecompressionStream !== 'undefined' ? DecompressionStream : null);
+    if (!DS) throw new Error('sem DecompressionStream');
+    const tryFmt = async fmt => {
+      const ds = new DS(fmt), w = ds.writable.getWriter(), r = ds.readable.getReader(), out = [];
+      w.write(fromLatin1(bin)).catch(() => {}); w.close().catch(() => {});
+      try { for (;;) { const { done, value } = await r.read(); if (done) break; out.push(value); } } catch (e) { if (!out.length) throw e; }
+      let n = 0; out.forEach(c => { n += c.length; }); const u = new Uint8Array(n); let o = 0; out.forEach(c => { u.set(c, o); o += c.length; });
+      return latin1(u);
+    };
+    try { return await tryFmt('deflate'); } catch (e) { return tryFmt('deflate-raw'); }
+  }
+
+  // ---------- PDF: objetos e fluxos ----------
+  function readObjects(s) {
+    const objs = {}; const re = /(\d+)\s+(\d+)\s+obj\b/g; let m;
+    const starts = [];
+    while ((m = re.exec(s))) starts.push({ num: +m[1], at: m.index, body: re.lastIndex });
+    for (let i = 0; i < starts.length; i++) {
+      const st = starts[i], lim = i + 1 < starts.length ? starts[i + 1].at : s.length;
+      let end = s.indexOf('endobj', st.body); if (end < 0 || end > lim) end = lim;
+      const body = s.slice(st.body, end);
+      const k = body.indexOf('stream');
+      const o = { num: st.num, dict: k >= 0 ? body.slice(0, k) : body, raw: null };
+      if (k >= 0 && /^stream\r?\n/.test(body.slice(k, k + 8))) {
+        let p = st.body + k + 6; if (s[p] === '\r') p++; if (s[p] === '\n') p++;
+        const lm = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(o.dict);
+        let e = lm ? p + +lm[1] : -1;
+        if (e < 0 || e > s.length || s.slice(e, e + 30).indexOf('endstream') < 0) e = s.indexOf('endstream', p);
+        o.raw = s.slice(p, e < 0 ? lim : e);
+      }
+      objs[st.num] = o;
+    }
+    return objs;
+  }
+  function a85(t) {
+    t = t.replace(/^\s*<~/, '').replace(/~>[\s\S]*$/, '').replace(/\s/g, '');
+    let out = '', i = 0;
+    while (i < t.length) {
+      if (t[i] === 'z') { out += '\0\0\0\0'; i++; continue; }
+      const g = t.slice(i, i + 5); i += 5; const pad = 5 - g.length; let n = 0;
+      for (let k = 0; k < 5; k++) n = n * 85 + ((k < g.length ? g.charCodeAt(k) : 117) - 33);
+      const b = [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+      out += String.fromCharCode.apply(null, b.slice(0, 4 - pad));
+    }
+    return out;
+  }
+  const ahx = t => { const h = t.replace(/[^0-9a-fA-F]/g, ''); let o = ''; for (let k = 0; k < h.length; k += 2) o += String.fromCharCode(parseInt((h.slice(k, k + 2) + '0').slice(0, 2), 16)); return o; };
+  async function streamData(o) {
+    if (o.raw == null) return null;
+    const fm = /\/Filter\s*(\[[^\]]*\]|\/\w+)/.exec(o.dict);
+    const filters = fm ? (fm[1].match(/\/\w+/g) || []).map(x => x.slice(1)) : [];
+    let d = o.raw;
+    for (const f of filters) {
+      try {
+        if (f === 'FlateDecode' || f === 'Fl') d = await inflate(d);
+        else if (f === 'ASCII85Decode' || f === 'A85') d = a85(d);
+        else if (f === 'ASCIIHexDecode' || f === 'AHx') d = ahx(d);
+        else return null; // imagens (DCT etc.) e outros filtros: ignora
+      } catch (e) { return null; }
+    }
+    return d;
+  }
+  // Objetos guardados dentro de "object streams" (PDF 1.5+): fontes costumam ficar aí.
+  async function expandObjStreams(objs) {
+    for (const k of Object.keys(objs)) {
+      const o = objs[k]; if (!/\/Type\s*\/ObjStm/.test(o.dict)) continue;
+      const d = await streamData(o); if (!d) continue;
+      const n = +((/\/N\s+(\d+)/.exec(o.dict) || [])[1] || 0), first = +((/\/First\s+(\d+)/.exec(o.dict) || [])[1] || 0);
+      const head = d.slice(0, first).trim().split(/\s+/).map(Number);
+      for (let i = 0; i < n; i++) {
+        const num = head[2 * i], off = head[2 * i + 1], nextOff = i + 1 < n ? head[2 * i + 3] : d.length - first;
+        if (!objs[num]) objs[num] = { num, dict: d.slice(first + off, first + nextOff), raw: null };
+      }
+    }
+  }
+  // CMap ToUnicode: código da fonte -> texto.
+  function parseCMap(t) {
+    const map = {}; let width = 1;
+    const hex = h => h.replace(/\s/g, '');
+    const uni = h => { h = hex(h); let out = ''; for (let i = 0; i + 4 <= h.length; i += 4) out += String.fromCharCode(parseInt(h.slice(i, i + 4), 16)); if (h.length === 2) out = String.fromCharCode(parseInt(h, 16)); return out; };
+    const cs = /begincodespacerange\s*<([0-9a-fA-F]+)>/.exec(t); if (cs) width = Math.max(1, hex(cs[1]).length / 2);
+    let m; const bc = /beginbfchar([\s\S]*?)endbfchar/g;
+    while ((m = bc.exec(t))) { const p = /<([0-9a-fA-F\s]+)>\s*<([0-9a-fA-F\s]*)>/g; let q; while ((q = p.exec(m[1]))) { map[parseInt(hex(q[1]), 16)] = uni(q[2]); width = Math.max(width, hex(q[1]).length / 2); } }
+    const br = /beginbfrange([\s\S]*?)endbfrange/g;
+    while ((m = br.exec(t))) {
+      const p = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(<[0-9a-fA-F\s]*>|\[[^\]]*\])/g; let q;
+      while ((q = p.exec(m[1]))) {
+        const a = parseInt(q[1], 16), b = parseInt(q[2], 16); width = Math.max(width, q[1].length / 2);
+        if (q[3][0] === '[') { const arr = q[3].match(/<([0-9a-fA-F\s]*)>/g) || []; arr.forEach((x, i) => { map[a + i] = uni(x.slice(1, -1)); }); }
+        else { const base = hex(q[3].slice(1, -1)); const v0 = parseInt(base.slice(-4) || '0', 16), pre = uni(base.slice(0, -4)); for (let c = a; c <= b && c - a < 65536; c++) map[c] = pre + String.fromCharCode(v0 + c - a); }
+      }
+    }
+    return { map, width };
+  }
+  // Nome do recurso (/F1) -> número do objeto da fonte, em qualquer dicionário de recursos.
+  function fontNames(objs) {
+    const names = {};
+    const scan = txt => { const re = /\/Font\s*<<([\s\S]*?)>>/g; let m; while ((m = re.exec(txt))) { const p = /\/([^\s/<>\[\]()]+)\s+(\d+)\s+\d+\s+R/g; let q; while ((q = p.exec(m[1]))) if (!(q[1] in names)) names[q[1]] = +q[2]; } };
+    Object.values(objs).forEach(o => scan(o.dict));
+    Object.values(objs).forEach(o => { const r = /\/Font\s+(\d+)\s+\d+\s+R/.exec(o.dict); if (r && objs[+r[1]]) { const d = objs[+r[1]].dict; const p = /\/([^\s/<>\[\]()]+)\s+(\d+)\s+\d+\s+R/g; let q; while ((q = p.exec(d))) if (!(q[1] in names)) names[q[1]] = +q[2]; } });
+    return names;
+  }
+
+  // ---------- conteúdo da página: operadores de texto ----------
+  function tokenize(c) {
+    const out = []; let i = 0; const n = c.length;
+    while (i < n) {
+      const ch = c[i];
+      if (/\s/.test(ch)) { i++; continue; }
+      if (ch === '%') { while (i < n && c[i] !== '\n' && c[i] !== '\r') i++; continue; }
+      if (ch === '(') {
+        let depth = 1, s = ''; i++;
+        while (i < n && depth) {
+          const x = c[i];
+          if (x === '\\') { const y = c[i + 1]; i += 2;
+            if (y === 'n') s += '\n'; else if (y === 'r') s += '\r'; else if (y === 't') s += '\t'; else if (y === 'b') s += '\b'; else if (y === 'f') s += '\f';
+            else if (y >= '0' && y <= '7') { let o = y; while (o.length < 3 && c[i] >= '0' && c[i] <= '7') o += c[i++]; s += String.fromCharCode(parseInt(o, 8) & 255); }
+            else if (y === '\r') { if (c[i] === '\n') i++; } else if (y === '\n') { /* continua linha */ } else if (y !== undefined) s += y;
+            continue; }
+          if (x === '(') depth++; else if (x === ')') { depth--; if (!depth) { i++; break; } }
+          s += x; i++;
+        }
+        out.push({ t: 'str', v: s }); continue;
+      }
+      if (ch === '<' && c[i + 1] === '<') { out.push({ t: 'op', v: '<<' }); i += 2; continue; }
+      if (ch === '>' && c[i + 1] === '>') { out.push({ t: 'op', v: '>>' }); i += 2; continue; }
+      if (ch === '<') { const e = c.indexOf('>', i); const h = c.slice(i + 1, e < 0 ? n : e).replace(/\s/g, ''); let s = ''; for (let k = 0; k < h.length; k += 2) s += String.fromCharCode(parseInt((h.slice(k, k + 2) + '0').slice(0, 2), 16)); out.push({ t: 'str', v: s }); i = e < 0 ? n : e + 1; continue; }
+      if (ch === '[') { out.push({ t: '[' }); i++; continue; }
+      if (ch === ']') { out.push({ t: ']' }); i++; continue; }
+      if (ch === '/') { let j = i + 1; while (j < n && !/[\s/\[\]()<>{}%]/.test(c[j])) j++; out.push({ t: 'name', v: c.slice(i + 1, j) }); i = j; continue; }
+      let j = i; while (j < n && !/[\s/\[\]()<>{}%]/.test(c[j])) j++;
+      if (j === i) { i++; continue; }
+      const w = c.slice(i, j); i = j;
+      if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(w)) out.push({ t: 'num', v: parseFloat(w) }); else out.push({ t: 'op', v: w });
+      if (w === 'BI') { const e = c.indexOf('EI', i); i = e < 0 ? n : e + 2; } // imagem embutida: pula
+    }
+    return out;
+  }
+  function contentText(c, fonts) {
+    const toks = tokenize(c); let stack = [], font = null, fs = 10, sc = 1, lines = [''], arr = null;
+    let x = null, y = null, lineX = 0;
+    const nl = () => { if (lines[lines.length - 1].trim()) lines.push(''); };
+    const sp = () => { const l = lines[lines.length - 1]; if (l && !/\s$/.test(l)) lines[lines.length - 1] = l + ' '; };
+    const em = () => Math.abs(fs * sc) || 10;
+    const moveTo = (nx, ny) => {
+      if (y != null && ny != null && Math.abs(ny - y) > 0.3 * em()) nl();
+      else if (x != null && nx != null) { const gap = nx - x; if (gap > 0.15 * em() || gap < -em()) sp(); }
+      x = nx; y = ny; lineX = nx;
+    };
+    const show = s => {
+      const f = font && fonts[font];
+      let t = '', adv = 0;
+      const w = f && f.cmap ? f.cmap.width : (f && f.two ? 2 : 1);
+      for (let k = 0; k + w <= s.length; k += w) {
+        let code = 0; for (let b = 0; b < w; b++) code = code * 256 + s.charCodeAt(k + b);
+        const u = f && f.cmap ? f.cmap.map[code] : null;
+        t += u != null ? u : (w === 1 ? decodeBytes(s[k]) : '');
+        const gw = f && f.widths ? f.widths(code) : null; adv += (gw != null ? gw : 500) / 1000;
+      }
+      lines[lines.length - 1] += t.replace(/[\u0000-\u0008\u000b-\u001f]/g, '');
+      if (x != null) x += adv * fs * sc;
+    };
+    for (const tk of toks) {
+      if (tk.t === '[') { arr = []; continue; }
+      if (tk.t === ']') { stack.push({ t: 'arr', v: arr || [] }); arr = null; continue; }
+      if (arr) { arr.push(tk); continue; }
+      if (tk.t !== 'op') { stack.push(tk); continue; }
+      const op = tk.v, nums = stack.filter(q => q.t === 'num').map(q => q.v);
+      if (op === 'Tf') { const nm = stack.filter(q => q.t === 'name').pop(); font = nm ? nm.v : null; if (nums.length) fs = nums[nums.length - 1]; }
+      else if (op === 'Tj') { const s = stack.filter(q => q.t === 'str').pop(); if (s) show(s.v); }
+      else if (op === "'" || op === '"') { nl(); x = lineX; const s = stack.filter(q => q.t === 'str').pop(); if (s) show(s.v); }
+      else if (op === 'TJ') { const a = stack.filter(q => q.t === 'arr').pop(); if (a) for (const q of a.v) { if (q.t === 'str') show(q.v); else if (q.t === 'num') { if (q.v < -250) sp(); if (x != null) x -= q.v / 1000 * fs * sc; } } }
+      else if (op === 'Td' || op === 'TD') { const tx = nums[0] || 0, ty = nums[1] || 0; const ny = y == null ? null : y + ty * sc; if (y == null) { if (Math.abs(ty) > 0.01) nl(); else if (tx > 0) sp(); } else moveTo(lineX + tx * sc, ny); }
+      else if (op === 'T*') { nl(); x = lineX; }
+      else if (op === 'Tm' && nums.length >= 6) { sc = Math.hypot(nums[0], nums[1]) || 1; moveTo(nums[4], nums[5]); }
+      else if (op === 'BT') { /* posição continua a do bloco anterior até um Tm */ }
+      stack = [];
+    }
+    return lines.map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  }
+  // Larguras dos caracteres (para saber onde há espaço entre palavras).
+  function arrayOf(objs, txt) { const r = /^\s*(\d+)\s+\d+\s+R/.exec(txt); return r && objs[+r[1]] ? objs[+r[1]].dict : txt; }
+  function widthsFn(objs, fd) {
+    const wm = /\/Widths\s*(\[[^\]]*\]|\d+\s+\d+\s+R)/.exec(fd);
+    if (wm) { const first = +((/\/FirstChar\s+(\d+)/.exec(fd) || [])[1] || 0); const arr = ((arrayOf(objs, wm[1]).match(/-?[\d.]+/g)) || []).map(Number); return c => arr[c - first]; }
+    const dm = /\/DescendantFonts\s*(\[\s*(\d+)\s+\d+\s+R\s*\]|(\d+)\s+\d+\s+R)/.exec(fd);
+    let cid = null;
+    if (dm) { const n = dm[2] || dm[3]; let d = objs[+n] && objs[+n].dict; if (d && /^\s*\[/.test(d)) { const r = /(\d+)\s+\d+\s+R/.exec(d); d = r && objs[+r[1]] ? objs[+r[1]].dict : null; } cid = d; }
+    else if (/\/DescendantFonts\s*\[\s*<</.test(fd)) cid = fd;
+    if (!cid) return null;
+    const dw = +((/\/DW\s+([\d.]+)/.exec(cid) || [])[1] || 1000);
+    const wpos = cid.indexOf('/W'); const map = {};
+    if (wpos >= 0 && !/^\/WMode/.test(cid.slice(wpos))) {
+      let src = cid.slice(wpos + 2).trim();
+      const ref = /^(\d+)\s+\d+\s+R/.exec(src); if (ref && objs[+ref[1]]) src = objs[+ref[1]].dict.trim();
+      if (src[0] === '[') {
+        let depth = 0, end = 0; for (let k = 0; k < src.length; k++) { if (src[k] === '[') depth++; else if (src[k] === ']') { depth--; if (!depth) { end = k; break; } } }
+        const body = src.slice(1, end); const tk = body.match(/\[|\]|-?[\d.]+/g) || []; let i = 0;
+        while (i < tk.length) {
+          const a = +tk[i]; if (tk[i + 1] === '[') { let k = i + 2, c = a; while (k < tk.length && tk[k] !== ']') map[c++] = +tk[k++]; i = k + 1; }
+          else { const b = +tk[i + 1], w = +tk[i + 2]; for (let c = a; c <= b && c - a < 65536; c++) map[c] = w; i += 3; }
+        }
+      }
+    }
+    return c => (c in map ? map[c] : dw);
+  }
+  async function pdfText(u8) {
+    const s = latin1(u8 instanceof Uint8Array ? u8 : new Uint8Array(u8));
+    if (s.slice(0, 1024).indexOf('%PDF') < 0) throw new Error('não é PDF');
+    if (/\/Encrypt\s+\d+\s+\d+\s+R/.test(s)) return { text: '', encrypted: true };
+    const objs = readObjects(s); await expandObjStreams(objs);
+    const names = fontNames(objs), fonts = {};
+    for (const [nm, num] of Object.entries(names)) {
+      const fo = objs[num]; if (!fo) continue;
+      const tu = /\/ToUnicode\s+(\d+)\s+\d+\s+R/.exec(fo.dict);
+      let cmap = null; if (tu && objs[+tu[1]]) { const d = await streamData(objs[+tu[1]]); if (d) cmap = parseCMap(d); }
+      fonts[nm] = { cmap, widths: widthsFn(objs, fo.dict), two: /Identity-H|Identity-V/.test(fo.dict) };
+    }
+    const parts = [];
+    for (const o of Object.values(objs).sort((a, b) => a.num - b.num)) {
+      if (o.raw == null || /\/Subtype\s*\/(Image|Type1C|CIDFontType0C|OpenType)|\/Type\s*\/(XRef|ObjStm|Metadata)|\/Length1|\/Length2/.test(o.dict)) continue;
+      const d = await streamData(o); if (!d || d.indexOf('begincmap') >= 0) continue;
+      if (!/\bBT\b/.test(d) || !/T[jJ]|'|"/.test(d)) continue;
+      const t = contentText(d, fonts); if (t) parts.push(t);
+    }
+    return { text: parts.join('\n'), encrypted: false };
+  }
+
+  // ---------- comprovante: encontrar os campos no texto ----------
+  const MONTHS = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+  const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const pad = n => String(n).padStart(2, '0');
+  function money(str) { const m = /(-?\d{1,3}(?:\.\d{3})+|-?\d+),(\d{2})(?!\d)/.exec(str); return m ? Math.abs(+(m[1].replace(/\./g, '') + '.' + m[2])) : null; }
+  function findDate(line, today) {
+    let m = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(line);
+    if (m) { let y = +m[3]; if (y < 100) y += 2000; return `${y}-${pad(+m[2])}-${pad(+m[1])}`; }
+    m = /(\d{4})-(\d{2})-(\d{2})/.exec(line); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    const f = fold(line);
+    m = /(\d{1,2})(?:\s+de)?\s+(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z]*\.?(?:\s+de)?\s+(\d{4})/.exec(f);
+    if (m) return `${m[3]}-${pad(MONTHS[m[2]])}-${pad(+m[1])}`;
+    m = /(\d{1,2})\/(\d{1,2})(?!\/|\d)/.exec(line); if (m && today && +m[2] <= 12 && +m[1] <= 31) return `${today.slice(0, 4)}-${pad(+m[2])}-${pad(+m[1])}`;
+    return null;
+  }
+  const TITLE = s => s.toLowerCase().replace(/(^|[\s.-])([a-zà-ú])/g, (x, a, b) => a + b.toUpperCase()).replace(/\b(De|Da|Do|Das|Dos|E)\b/g, w => w.toLowerCase()).replace(/\b(Ltda|S\.?a|Me|Eireli|Mei)\b\.?/gi, w => w.toUpperCase());
+  const RE_DEST = /^(dados\s+(do|da|de)\s+)?(destino|destinat[aá]rio|recebedor|favorecido|benefici[aá]rio|para|quem\s+recebeu|conta\s+destino|pago\s+para|enviado\s+para|transferido\s+para)\b/i;
+  const RE_ORIG = /^(dados\s+(do|da|de)\s+)?(origem|pagador|remetente|quem\s+pagou|quem\s+enviou|conta\s+origem|de|enviado\s+por|pago\s+por)\b/i;
+  const RE_NAME = /^(nome(\s+(do|da)\s+(favorecido|recebedor|benefici[aá]rio|pagador|destinat[aá]rio|remetente))?|raz[aã]o\s+social|favorecido|recebedor|benefici[aá]rio|destinat[aá]rio|pagador|remetente|para|de|quem\s+recebeu|quem\s+pagou)\s*:?\s*(.*)$/i;
+  const RE_BANK = /^(institui[cç][aã]o(\s+financeira)?|banco)\s*:?\s*(.*)$/i;
+  const BAD_NAME = /^(cpf|cnpj|chave|ag[eê]ncia|conta|institui|banco|tipo|valor|data|hor[aá]rio|id|c[oó]digo|autentica|\*|\d|•)/i;
+
+  function parseReceipt(text, opts) {
+    const today = (opts && opts.today) || null;
+    const lines = String(text || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const all = fold(lines.join('\n'));
+    const r = { amount: null, date: null, type: null, method: null, counterparty: '', bank: '', description: '', found: [] };
+    // tipo e direção
+    const methods = [['pix', /\bpix\b/], ['boleto', /\bboleto|linha digitavel|codigo de barras/], ['ted', /\bted\b/], ['doc', /\bdoc\b/], ['cartao', /cartao de (credito|debito)|compra (no|com) cartao/], ['debito automatico', /debito automatico/], ['deposito', /\bdeposito\b/], ['transferencia', /transferencia/]];
+    for (const [k, re] of methods) if (re.test(all)) { r.method = k; break; }
+    const incoming = /(pix|transferencia|ted|valor|dinheiro|deposito)\s+recebid|voce recebeu|comprovante de recebimento|credito em conta|recebimento de pix/.test(all);
+    r.type = incoming ? 'receita' : 'despesa';
+    // valor: preferir linha com "valor"/"total"/"pago"
+    let best = null;
+    lines.forEach((l, i) => {
+      const f = fold(l); const v = money(l); const label = /\bvalor|\btotal|\bpago\b|\bquantia|\bmontante/.test(f) && !/saldo|tarifa|juros|multa|desconto|limite|anterior/.test(f);
+      let val = v, score = 0;
+      if (label && val == null && lines[i + 1] && money(lines[i + 1]) != null) { val = money(lines[i + 1]); }
+      if (val == null) return;
+      score = (label ? 10 : 0) + (/r\$/.test(f) || (lines[i + 1] && /r\$/i.test(lines[i + 1])) ? 3 : 0) - (/saldo|tarifa|limite/.test(f) ? 20 : 0) - i * 0.01;
+      if (/valor (do documento|original|nominal)/.test(f)) score -= 2; // em boleto, preferir o valor pago
+      if (/valor (pago|cobrado|total|da transferencia|do pix|transferido|enviado|recebido)/.test(f)) score += 5;
+      if (!best || score > best.score) best = { val, score };
+    });
+    if (best && best.score > -5) { r.amount = best.val; r.found.push('valor'); }
+    // data: preferir linha com "data"
+    let dBest = null;
+    lines.forEach((l, i) => { const d = findDate(l, today) || (/\bdata\b/i.test(l) && lines[i + 1] ? findDate(lines[i + 1], today) : null); if (!d) return; const f = fold(l); const sc = (/\bdata\b|realizad|efetuad|pagamento em|em:/.test(f) ? 5 : 0) - (/vencimento|validade|nascimento|emissao do boleto/.test(f) ? 6 : 0) - i * 0.01; if (!dBest || sc > dBest.sc) dBest = { d, sc }; });
+    if (dBest) { r.date = dBest.d; r.found.push('data'); }
+    // quem recebeu (despesa) ou quem pagou (receita), por seções
+    let section = null; const cand = { dest: [], orig: [], any: [] }; const banks = { dest: [], orig: [] };
+    const take = (arr, v) => { v = (v || '').replace(/\s*[-–|]\s*(cpf|cnpj).*$/i, '').trim(); if (v && v.length >= 3 && !BAD_NAME.test(v) && /[a-zà-ú]{2}/i.test(v)) arr.push(v); };
+    lines.forEach((l, i) => {
+      if (RE_DEST.test(l) && l.length < 40 && !RE_NAME.test(l.replace(RE_DEST, 'x'))) section = 'dest';
+      else if (RE_ORIG.test(l) && l.length < 40 && !/^de\s+\S/i.test(l)) section = 'orig';
+      const m = RE_NAME.exec(l);
+      if (m) {
+        const lab = fold(m[1]); const val = m[5] || ''; const v = val || (lines[i + 1] && !RE_NAME.test(lines[i + 1]) ? lines[i + 1] : '');
+        const sec = /favorecido|recebedor|beneficiari|destinatari|para|quem recebeu/.test(lab) ? 'dest' : /pagador|remetente|quem pagou|^de$/.test(lab) ? 'orig' : section;
+        take(sec ? cand[sec] : cand.any, v);
+      }
+      const b = RE_BANK.exec(l); if (b) { const v = b[3] || lines[i + 1] || ''; if (section && v && !/^\d+$/.test(v)) banks[section].push(v.replace(/^\d{3}\s*[-–]\s*/, '')); }
+    });
+    const side = r.type === 'receita' ? 'orig' : 'dest';
+    const name = cand[side][0] || cand.any[0] || '';
+    if (name) { r.counterparty = /[a-z]/.test(name) ? name : TITLE(name); r.found.push('nome'); }
+    r.bank = (banks[side][0] || '').trim();
+    const MLABEL = { pix: 'Pix', boleto: 'Boleto', ted: 'TED', doc: 'DOC', cartao: 'Cartão', 'debito automatico': 'Débito automático', deposito: 'Depósito', transferencia: 'Transferência' };
+    r.description = r.counterparty ? r.counterparty : (r.method ? (MLABEL[r.method] + (r.type === 'receita' ? ' recebido' : '')) : '');
+    r.methodLabel = r.method ? MLABEL[r.method] : '';
+    r.complete = r.amount != null && !!r.date;
+    return r;
+  }
+
+  // ---------- IA: provedores ----------
+  const PROMPT = `Você lê comprovantes bancários brasileiros (Pix, TED, boleto, cartão, depósito) para um app de finanças pessoais.
+Responda SOMENTE com um objeto JSON, sem texto antes ou depois, com estas chaves:
+{"e_comprovante": true/false, "valor": número com ponto decimal (ex.: 1234.56) ou null, "data": "AAAA-MM-DD" ou null,
+ "direcao": "saida" se quem tem o comprovante pagou/enviou, "entrada" se recebeu,
+ "meio": "pix" | "boleto" | "ted" | "doc" | "cartao" | "deposito" | "transferencia" | "outro",
+ "contraparte": nome de quem recebeu (se saída) ou de quem pagou (se entrada), ou "",
+ "banco_contraparte": instituição da contraparte ou "", "descricao_curta": até 5 palavras, ex.: "Pix para Maria Souza" }
+Regras: use o valor efetivamente pago/transferido (não saldo, limite ou tarifa). Não invente: se não der para ler, use null ou "".
+Nunca inclua CPF, CNPJ, chave Pix, agência, número de conta ou código de autenticação na resposta.`;
+  const PROVIDERS = {
+    gemini: { name: 'Google Gemini', company: 'Google', art: 'o', host: 'https://generativelanguage.googleapis.com', keyHint: 'começa com AIza', keyUrl: 'https://aistudio.google.com/apikey', free: true },
+    openai: { name: 'ChatGPT (OpenAI)', company: 'OpenAI', art: 'a', host: 'https://api.openai.com', keyHint: 'começa com sk-', keyUrl: 'https://platform.openai.com/api-keys', free: false },
+    anthropic: { name: 'Claude (Anthropic)', company: 'Anthropic', art: 'a', host: 'https://api.anthropic.com', keyHint: 'começa com sk-ant-', keyUrl: 'https://console.anthropic.com/settings/keys', free: false }
+  };
+  const DEFAULT_MODEL = { gemini: 'gemini-2.5-flash', openai: 'gpt-4o-mini', anthropic: 'claude-opus-5-5' };
+  const ANTHROPIC_HEADERS = key => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true', 'content-type': 'application/json' });
+
+  function modelsRequest(p, key) {
+    if (p === 'gemini') return { url: PROVIDERS.gemini.host + '/v1beta/models?pageSize=200', init: { headers: { 'x-goog-api-key': key } } };
+    if (p === 'openai') return { url: PROVIDERS.openai.host + '/v1/models', init: { headers: { Authorization: 'Bearer ' + key } } };
+    return { url: PROVIDERS.anthropic.host + '/v1/models?limit=100', init: { headers: ANTHROPIC_HEADERS(key) } };
+  }
+  const ver = id => { const m = String(id).match(/(\d+(?:[.-]\d+)?)/); return m ? parseFloat(m[1].replace('-', '.')) : 0; };
+  // Lista de modelos -> os que servem para ler imagem, do mais indicado para o menos.
+  function pickModels(p, json) {
+    let ids = [];
+    if (p === 'gemini') ids = (json.models || []).filter(m => !m.supportedGenerationMethods || m.supportedGenerationMethods.indexOf('generateContent') >= 0).map(m => String(m.name || '').replace(/^models\//, ''));
+    else ids = (json.data || []).map(m => m.id);
+    ids = ids.filter(Boolean);
+    let rank;
+    if (p === 'gemini') {
+      ids = ids.filter(id => /^gemini/.test(id) && !/(tts|image|embed|live|audio|aqa|robotics|computer|native|veo|imagen|thinking-exp|learnlm)/.test(id));
+      rank = id => (/flash/.test(id) ? 300 : /pro/.test(id) ? 100 : 0) - (/lite/.test(id) ? 50 : 0) - (/preview|exp/.test(id) ? 30 : 0) - (/latest/.test(id) ? 5 : 0) - (/-\d{3}$|-\d{2}-\d{2,4}$/.test(id) ? 3 : 0) + ver(id.replace(/^gemini-/, '')) * 10;
+    } else if (p === 'openai') {
+      ids = ids.filter(id => /^(gpt-|o\d|chatgpt)/.test(id) && !/(audio|realtime|tts|transcribe|search|image|codex|instruct|0301|0314|0613|16k|vision-preview|3\.5)/.test(id));
+      rank = id => (/mini/.test(id) ? 200 : 0) - (/nano/.test(id) ? 40 : 0) + (/^gpt-/.test(id) ? 50 : 0) - (/\d{4}-\d{2}-\d{2}/.test(id) ? 5 : 0) - (/preview/.test(id) ? 30 : 0) + ver(id.replace(/^gpt-/, '')) * 10;
+    } else {
+      ids = ids.filter(id => /^claude/.test(id));
+      rank = id => (id === 'claude-opus-5-5' ? 1000 : 0) + (/opus/.test(id) ? 300 : /sonnet/.test(id) ? 200 : /haiku/.test(id) ? 100 : 0) + ver(id.replace(/^claude-(opus|sonnet|haiku|fable|mythos)-/, '')) * 10 - (/\d{8}$/.test(id) ? 5 : 0);
+    }
+    return Array.from(new Set(ids)).sort((a, b) => rank(b) - rank(a));
+  }
+
+  // Monta o pedido de leitura. file: { mime, base64 } (imagem ou PDF) e/ou text (texto já extraído do PDF).
+  function readRequest(p, key, model, file, text) {
+    const prompt = PROMPT + (text ? '\n\nTexto extraído do comprovante:\n"""\n' + String(text).slice(0, 12000) + '\n"""' : '');
+    const isPdf = file && file.mime === 'application/pdf';
+    if (p === 'gemini') {
+      const parts = [{ text: prompt }]; if (file) parts.push({ inline_data: { mime_type: file.mime, data: file.base64 } });
+      return { url: `${PROVIDERS.gemini.host}/v1beta/models/${encodeURIComponent(model)}:generateContent`, init: { method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
+        body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0 } }) } };
+    }
+    if (p === 'openai') {
+      const content = [{ type: 'text', text: prompt }];
+      if (file) content.push(isPdf ? { type: 'file', file: { filename: 'comprovante.pdf', file_data: 'data:application/pdf;base64,' + file.base64 } } : { type: 'image_url', image_url: { url: `data:${file.mime};base64,${file.base64}` } });
+      return { url: PROVIDERS.openai.host + '/v1/chat/completions', init: { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'content-type': 'application/json' },
+        body: JSON.stringify({ model, messages: [{ role: 'user', content }], response_format: { type: 'json_object' } }) } };
+    }
+    const content = [];
+    if (file) content.push(isPdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.base64 } } : { type: 'image', source: { type: 'base64', media_type: file.mime, data: file.base64 } });
+    content.push({ type: 'text', text: prompt });
+    return { url: PROVIDERS.anthropic.host + '/v1/messages', init: { method: 'POST', headers: ANTHROPIC_HEADERS(key), body: JSON.stringify({ model, max_tokens: 2048, messages: [{ role: 'user', content }] }) } };
+  }
+  // Mensagem de erro da empresa da IA, em português simples.
+  function explainError(p, status, json) {
+    const raw = json && (json.error && (json.error.message || json.error.type) || json.message) || '';
+    const nm = PROVIDERS[p].name;
+    if (status === 400 && /api key not valid|API_KEY_INVALID/i.test(raw)) return 'A chave do ' + nm + ' não é válida. Confira se copiou inteira.';
+    if (status === 401 || status === 403) return 'A chave do ' + nm + ' foi recusada (inválida, apagada ou sem permissão). Confira a chave.' + (raw ? ' Detalhe: ' + raw : '');
+    if (status === 429) return p === 'gemini' ? 'Passou do limite do plano grátis do Gemini por agora. Espere um pouco (o limite volta a cada minuto e zera todo dia) e tente de novo.' : 'Limite de uso ou crédito esgotado no ' + nm + '. Confira o saldo/limite na sua conta.' + (raw ? ' Detalhe: ' + raw : '');
+    if (status === 402 || /credit|billing|quota|insufficient/i.test(raw)) return 'Sem crédito no ' + nm + '. Adicione crédito na sua conta ou use outra IA.';
+    if (status === 404) return 'O modelo escolhido não existe mais no ' + nm + '. Em Mais → Leitor de comprovantes, toque em "Testar chave" para atualizar a lista.';
+    if (status >= 500) return 'O ' + nm + ' está com problema agora. Tente de novo em alguns minutos.';
+    return 'O ' + nm + ' recusou o pedido' + (status ? ' (erro ' + status + ')' : '') + '.' + (raw ? ' Detalhe: ' + raw : '');
+  }
+  function responseText(p, json) {
+    if (p === 'gemini') { const c = (json.candidates || [])[0]; if (!c) return { text: '', blocked: !!(json.promptFeedback && json.promptFeedback.blockReason) }; return { text: ((c.content || {}).parts || []).map(x => x.text || '').join(''), blocked: c.finishReason === 'SAFETY' }; }
+    if (p === 'openai') { const c = (json.choices || [])[0] || {}; return { text: (c.message || {}).content || '', blocked: !!(c.message && c.message.refusal) }; }
+    return { text: (json.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), blocked: json.stop_reason === 'refusal' };
+  }
+  // Resposta da IA -> mesmos campos da leitura local.
+  function fromAi(text) {
+    const s = String(text || ''); const a = s.indexOf('{'), b = s.lastIndexOf('}');
+    if (a < 0 || b < a) throw new Error('A IA não devolveu os dados no formato esperado.');
+    let j; try { j = JSON.parse(s.slice(a, b + 1)); } catch (e) { throw new Error('A IA não devolveu os dados no formato esperado.'); }
+    const r = { amount: null, date: null, type: j.direcao === 'entrada' ? 'receita' : 'despesa', method: null, counterparty: '', bank: '', description: '', found: [], notReceipt: j.e_comprovante === false };
+    const v = typeof j.valor === 'number' ? j.valor : typeof j.valor === 'string' ? (money(j.valor) != null ? money(j.valor) : parseFloat(j.valor)) : NaN;
+    if (isFinite(v) && v > 0) { r.amount = Math.round(Math.abs(v) * 100) / 100; r.found.push('valor'); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(j.data || '')) { r.date = j.data; r.found.push('data'); }
+    const MET = { pix: 'Pix', boleto: 'Boleto', ted: 'TED', doc: 'DOC', cartao: 'Cartão', deposito: 'Depósito', transferencia: 'Transferência' };
+    if (MET[j.meio]) { r.method = j.meio; r.methodLabel = MET[j.meio]; }
+    const clean = x => String(x || '').replace(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    r.counterparty = clean(j.contraparte); if (r.counterparty) r.found.push('nome');
+    r.bank = clean(j.banco_contraparte);
+    r.description = r.counterparty || clean(j.descricao_curta) || (r.methodLabel || '');
+    r.complete = r.amount != null && !!r.date;
+    return r;
+  }
+
+  const api = { pdfText, parseReceipt, contentText, parseCMap, PROVIDERS, DEFAULT_MODEL, PROMPT, modelsRequest, pickModels, readRequest, responseText, explainError, fromAi };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Leitor = api;
+})(typeof self !== 'undefined' ? self : this);
+
 /* Armazenamento local (IndexedDB). Tudo fica só neste aparelho. */
 (function (root) {
   'use strict';
@@ -2899,6 +3320,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     scale: '<path d="M12 3v18M5 7h14M5 7l-3 7a4 4 0 0 0 6 0zM19 7l-3 7a4 4 0 0 0 6 0z"/>',
     chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
     send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="12" y2="17"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
     bar: '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>'
   };
@@ -3219,7 +3641,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     <div class="quick">
       <button data-act="tx-new"><span>${ic('plus')}</span>Lançar</button>
       <button data-act="save-money"><span>${ic('lock')}</span>Guardar</button>
-      <button data-act="tab" data-tab="extrato"><span>${ic('list')}</span>Extrato</button>
+      <button data-act="receipt-read"><span>${ic('scan')}</span>Comprovante</button>
       <button data-act="tab" data-tab="pergunte"><span>${ic('chat')}</span>Pergunte</button>
       <button data-act="page" data-tab="mais" data-page="docs"><span>${ic('file')}</span>Documentos</button>
     </div>
@@ -3917,15 +4339,17 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const openObl = () => (ds.obligations || []).filter(o => C.isObligationOpen(o)).sort((x, y) => String(x.due_date || '9').localeCompare(String(y.due_date || '9')));
     const curOf = id => isCreditId(id) ? 'BRL' : currencyForAccount(id);
     const draft = () => ({ type: a.type, amount: String(a.amount), date: a.date, status: a.date > today ? 'planejado' : 'confirmado', account_id: a.account_id, to_account_id: a.to_account_id,
-      amount_to: a.amount_to ? String(a.amount_to) : '', category: a.category, description: a.description, origin: 'usuario', notes: '', tags: '', obligation_id: a.obligation_id, after_snapshot: a.after_snapshot, file: null, category_auto: a.catManual ? null : a.category_auto });
+      amount_to: a.amount_to ? String(a.amount_to) : '', category: a.category, description: a.description, origin: 'usuario', notes: a.notes || '', tags: '', obligation_id: a.obligation_id, after_snapshot: a.after_snapshot, file: a.file || null, category_auto: a.catManual ? null : a.category_auto });
     const kinds = [['despesa', 'Gastei', 'compra, conta paga, saída de dinheiro'], ['receita', 'Recebi', 'salário, venda, reembolso'], ['transferencia', 'Transferi entre minhas contas', 'não é gasto nem receita'],
-      hasCards ? ['pagamento_fatura', 'Paguei a fatura do cartão', 'tira da conta e abate a fatura'] : null, ['guardar', 'Guardei dinheiro', 'mandar para uma reserva']].filter(Boolean);
+      hasCards ? ['pagamento_fatura', 'Paguei a fatura do cartão', 'tira da conta e abate a fatura'] : null, ['guardar', 'Guardei dinheiro', 'mandar para uma reserva'],
+      preset ? null : ['comprovante', 'Tenho o comprovante', 'o app lê a foto, o print ou o PDF e preenche para você']].filter(Boolean);
+    const rc = a.fromReceipt, rcHelp = (txt) => rc && rc !== 'manual' ? `<span class="badge ok">lido do comprovante</span> ${txt}` : '';
     runWizard({ title: preset && preset.obligation_id ? 'Registrar pagamento' : 'Novo lançamento', a, finishLabel: 'Salvar lançamento', steps: [
-      { id: 'type', decides: true, when: () => !(preset && preset.type), type: 'choice', q: () => 'O que aconteceu?', options: () => kinds.map(([v, l, s]) => ({ v, label: l, sub: s, on: a.type === v })),
-        apply: (a, v) => { if (v === 'guardar') { setTimeout(() => openSaveWizard(), 50); S.sheets.slice(-1)[0].close(); return 'abrindo'; } if (a.type !== v) { a.category = ''; a.description = ''; a.to_account_id = ''; } a.type = v; } },
-      { id: 'amount', type: 'input', q: a => ({ despesa: 'Quanto você gastou?', receita: 'Quanto você recebeu?', transferencia: 'Quanto você transferiu?', pagamento_fatura: 'Quanto você pagou da fatura?' })[a.type],
+      { id: 'type', decides: true, when: () => !(preset && preset.type) || !!rc, type: 'choice', q: () => rc ? 'O que é este comprovante?' : 'O que aconteceu?', help: a => rc && a.type ? rcHelp('Parece que você ' + (a.type === 'receita' ? 'recebeu' : 'pagou') + '. Confirme ou troque.') : rc ? 'O comprovante fica anexado ao lançamento.' : '', options: () => kinds.map(([v, l, s]) => ({ v, label: l, sub: s, on: a.type === v })),
+        apply: (a, v) => { if (v === 'guardar') { setTimeout(() => openSaveWizard(), 50); S.sheets.slice(-1)[0].close(); return 'abrindo'; } if (v === 'comprovante') { S.sheets.slice(-1)[0].close(); setTimeout(() => openReceiptReader(), 50); return 'abrindo'; } if (rc && v !== 'despesa') { a.category = ''; a.category_auto = null; } if (a.type !== v && !rc) { a.category = ''; a.description = ''; a.to_account_id = ''; } a.type = v; } },
+      { id: 'amount', type: 'input', help: a => a.amount ? rcHelp('Confira se é o valor pago.') : '', q: a => ({ despesa: 'Quanto você gastou?', receita: 'Quanto você recebeu?', transferencia: 'Quanto você transferiu?', pagamento_fatura: 'Quanto você pagou da fatura?' })[a.type],
         input: a => ({ kind: 'money', value: a.amount ? String(a.amount).replace('.', ',') : '', placeholder: '0,00' }), apply: (a, v) => { const n = wzMoney(v); if (!n) return 'Digite um valor maior que zero, ex.: 25,90.'; a.amount = n; } },
-      { id: 'desc', when: a => (a.type === 'despesa' || a.type === 'receita') && !(preset && preset.obligation_id), type: 'input', q: a => a.type === 'despesa' ? 'Com o quê?' : 'De onde veio?', help: () => 'Escreva do seu jeito. A categoria é sugerida pelo que você escrever.',
+      { id: 'desc', when: a => (a.type === 'despesa' || a.type === 'receita') && !(preset && preset.obligation_id), type: 'input', q: a => a.type === 'despesa' ? 'Com o quê?' : 'De onde veio?', help: a => a.receipt && a.receipt.description && a.description === a.receipt.description.slice(0, 80) ? rcHelp('Nome que está no comprovante. Pode trocar por algo que você reconheça, ex.: Mercado.') : 'Escreva do seu jeito. A categoria é sugerida pelo que você escrever.',
         input: a => ({ kind: 'text', value: a.description, placeholder: a.type === 'despesa' ? 'ex.: Mercado' : 'ex.: Salário' }),
         quick: a => uniq(frequentDescriptions(a.type, 4).concat(a.type === 'despesa' ? ['Mercado', 'Uber', 'Farmácia', 'Restaurante', 'Combustível', 'Padaria'] : ['Salário', 'Pix recebido', 'Reembolso', 'Venda', 'Rendimento'])).slice(0, 8).map(x => [x, x]),
         apply: (a, v) => { if (!v) return 'Escreva uma descrição curta ou toque numa sugestão.'; a.description = v.slice(0, 80); if (!a.catManual) { const r = Classify.classify(a.description); a.category = r ? r.category : (a.type === 'receita' ? '' : a.category); a.category_auto = r ? r.keyword : null; } } },
@@ -3945,7 +4369,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       { id: 'obl', when: a => a.type === 'despesa' && !(preset && preset.obligation_id) && openObl().length > 0, type: 'choice', q: () => 'É o pagamento de alguma conta a pagar?', help: () => 'Se for, ela sai da lista de "A pagar".',
         options: a => [{ v: '', label: 'Não', on: !a.obligation_id }].concat(openObl().slice(0, 8).map(o => ({ v: o.id, label: esc(obligationTitle(o)), sub: [o.due_date ? 'vence ' + fdate(o.due_date) : 'sem data', money(C.openAmountOf(o), C.currencyOf(o, ds))].join(' · '), on: a.obligation_id === o.id }))),
         apply: (a, v) => { a.obligation_id = v; } },
-      { id: 'date', type: 'input', q: () => 'Quando foi?', help: () => 'Data no futuro fica como "planejado" e não mexe no saldo até acontecer.',
+      { id: 'date', type: 'input', q: () => 'Quando foi?', help: a => a.receipt && a.receipt.date && rcHelp('') ? rcHelp('Confira a data.') : 'Data no futuro fica como "planejado" e não mexe no saldo até acontecer.',
         input: a => ({ kind: 'date', value: a.date }), quick: () => wzDays(today), apply: (a, v) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'Escolha a data.'; a.date = v; a.after_snapshot = null; } },
       { id: 'snap', when: a => needsSnapshotAnswer(draft()), type: 'choice', q: () => 'Esse valor já estava no saldo que você informou?',
         help: a => `O saldo de ${esc(accountName(a.account_id))} foi informado com data de ${fdate(cutoffFor(a.account_id))}, o mesmo dia deste lançamento.`,
@@ -3957,7 +4381,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
             ${a.description ? `<dt>Descrição</dt><dd>${esc(a.description)}</dd>` : ''}${a.type === 'despesa' ? `<dt>Categoria</dt><dd>${esc(a.category || 'sem categoria')}</dd>` : ''}
             <dt>${a.type === 'receita' ? 'Entrou em' : 'Saiu de'}</dt><dd>${esc(accountName(a.account_id))}</dd>${a.to_account_id ? `<dt>Para</dt><dd>${esc(accountName(a.to_account_id))}</dd>` : ''}
             ${a.obligation_id ? `<dt>Paga a conta</dt><dd>${esc(obligationTitle((ds.obligations || []).find(o => o.id === a.obligation_id) || {}))}</dd>` : ''}
-            <dt>Data</dt><dd>${fdate(a.date)}</dd><dt>Situação</dt><dd>${statusBadge(d.status)}</dd></dl></div>`;
+            <dt>Data</dt><dd>${fdate(a.date)}</dd><dt>Situação</dt><dd>${statusBadge(d.status)}</dd>${a.file ? `<dt>Comprovante</dt><dd style="color:var(--pos)">✓ anexado</dd>` : ''}</dl></div>`;
         }, more: { label: 'Mais opções (comprovante, observação)', act: a => openTxForm(null, Object.assign(draft(), { amount: String(a.amount).replace('.', ','), amount_to: a.amount_to ? String(a.amount_to).replace('.', ',') : '', catManual: a.catManual })) } }
     ], finish: async a => {
       const d = draft();
@@ -3967,6 +4391,169 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
       S.sheets.slice(-1)[0].close();
       await persistTx(null, d);
     } });
+  }
+
+  // ---------- leitor de comprovantes ----------
+  // A chave da IA é de cada pessoa e fica SÓ neste aparelho: não vai para backup, JSON, GitHub nem sincronização.
+  const IA_DEFAULT = () => ({ provider: '', keys: {}, models: {}, lists: {}, noWarn: false });
+  async function iaLoad() { if (S.ia) return S.ia; try { S.ia = Object.assign(IA_DEFAULT(), (await DB.get('ia_cfg')) || {}); } catch (e) { S.ia = IA_DEFAULT(); } return S.ia; }
+  async function iaSave() { await DB.set('ia_cfg', S.ia); }
+  const iaReady = () => !!(S.ia && S.ia.provider && S.ia.keys[S.ia.provider]);
+  const iaModel = p => (S.ia.models[p]) || (S.ia.lists[p] || [])[0] || Leitor.DEFAULT_MODEL[p];
+  const maskKey = k => k ? k.slice(0, 4) + '••••' + k.slice(-4) : '';
+  const IA_PRIVACY = {
+    gemini: 'No plano <b>grátis</b> do Gemini, o Google pode usar o que você envia para melhorar os produtos dele, e pessoas podem revisar. Se você ativar faturamento (plano pago) na conta Google AI Studio, isso deixa de valer.',
+    openai: 'A OpenAI diz que não usa o que chega pela API para treinar modelos (por padrão) e guarda por até 30 dias para checar abusos. A API é paga por uso: precisa colocar crédito na conta.',
+    anthropic: 'A Anthropic diz que não usa o que chega pela API para treinar modelos (por padrão) e guarda por um período curto. A API é paga por uso: precisa colocar crédito na conta.'
+  };
+
+  function pageLeitor() {
+    if (!S.ia) { iaLoad().then(() => render()); return backBar('Mais', 'mais') + '<p class="muted">Carregando…</p>'; }
+    const ia = S.ia, P = Leitor.PROVIDERS;
+    const sel = S.iaPick || ia.provider || 'gemini';
+    let h = backBar('Mais', 'mais') + `<h1 class="page-title">Leitor de comprovantes</h1>
+      <div class="card"><div class="lbl">Como funciona</div><ol class="small" style="padding-left:18px;margin:6px 0 0;display:grid;gap:6px">
+        <li>Toque em <b>Comprovante</b> na tela inicial e escolha a foto, o print ou o PDF que o banco gerou.</li>
+        <li><b>PDF</b>: o app lê sozinho, aqui no aparelho. Nada sai do celular.</li>
+        <li><b>Foto ou print</b>: precisa de uma IA. Ela lê a imagem e devolve valor, data e nome.</li>
+        <li>Você <b>confere cada resposta</b> antes de salvar, e o comprovante fica anexado ao lançamento.</li></ol></div>
+      <div class="section-title"><span>IA para ler fotos (opcional)</span></div>
+      <div class="card"><p class="small" style="margin-top:0">Cada pessoa usa a <b>própria chave</b> da IA que preferir. A chave fica <b>só neste aparelho</b>: não vai para backup, sincronização nem para a família.</p>
+        <div class="rows" style="margin-top:6px">${Object.keys(P).map(p => `<button class="radio-card" data-act="ia-pick" data-p="${p}" style="width:100%;text-align:left;${sel === p ? 'border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)' : ''}"><div><b>${esc(P[p].name)}</b> ${P[p].free ? '<span class="badge ok">tem plano grátis</span>' : '<span class="badge">pago por uso</span>'}${ia.keys[p] ? ` <span class="badge gold">chave salva</span>` : ''}${ia.provider === p && ia.keys[p] ? ' <span class="badge ok">em uso</span>' : ''}</div></button>`).join('')}</div></div>`;
+    const key = ia.keys[sel] || '', list = ia.lists[sel] || [];
+    h += `<div class="card"><div class="lbl">${esc(P[sel].name)}</div>
+      <ol class="small" style="padding-left:18px;margin:6px 0 10px;display:grid;gap:4px">
+        <li>Abra <a href="${P[sel].keyUrl}" target="_blank" rel="noopener">${esc(P[sel].keyUrl.replace('https://', ''))}</a> e entre com sua conta${sel === 'gemini' ? ' Google' : ''}.</li>
+        <li>Crie uma chave de API (${esc(P[sel].keyHint)}) e copie.</li><li>Cole abaixo e toque em <b>Salvar e testar</b>.</li></ol>
+      ${sel === 'gemini' ? `<div class="notice">${ic('info')}<div class="ntext small">Assinatura do Gemini (Google AI Plus/Pro) é para o app do Gemini e <b>não inclui</b> a API. Mas a API tem <b>plano grátis próprio</b> no Google AI Studio, com limite de pedidos por minuto e por dia, que sobra para ler comprovantes.</div></div>` : ''}
+      ${sel === 'openai' ? `<div class="notice">${ic('info')}<div class="ntext small">Assinatura do ChatGPT Plus <b>não inclui</b> a API. A API é cobrada à parte, por uso, em platform.openai.com.</div></div>` : ''}
+      ${sel === 'anthropic' ? `<div class="notice">${ic('info')}<div class="ntext small">Assinatura do Claude (Pro/Max) <b>não inclui</b> a API. A API é cobrada à parte, por uso, em console.anthropic.com.</div></div>` : ''}
+      <div class="field" style="margin-top:10px"><label for="ia-key">Chave de API</label><div style="display:flex;gap:8px"><input id="ia-key" class="input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${key ? esc(maskKey(key)) + ' (salva)' : 'cole a chave aqui'}"><button class="btn ghost" style="flex:none;width:auto" data-act="pw-toggle" data-id="ia-key">ver</button></div></div>
+      ${list.length ? `<div class="field"><label for="ia-model">Modelo</label><select id="ia-model" class="input" data-change="ia-model" data-p="${sel}">${list.slice(0, 30).map(m => `<option value="${esc(m)}" ${iaModel(sel) === m ? 'selected' : ''}>${esc(m)}${m === list[0] ? ' (indicado)' : ''}</option>`).join('')}</select>
+        <div class="help">${sel === 'gemini' ? 'Os modelos "flash" estão no plano grátis. Os "pro" costumam ser pagos.' : sel === 'anthropic' ? 'O indicado é o mais preciso. Os "haiku" custam bem menos e costumam bastar para comprovantes legíveis.' : 'Os modelos "mini" custam bem menos e costumam bastar para comprovantes.'}</div></div>` : ''}
+      <div id="ia-msg" class="small" style="margin:6px 0"></div>
+      <div class="btn-row"><button class="btn" data-act="ia-save" data-p="${sel}">${key ? 'Testar de novo' : 'Salvar e testar'}</button>${key ? `<button class="btn secondary" data-act="ia-del" data-p="${sel}">${ic('trash')} Apagar chave</button>` : ''}</div>
+      ${key && ia.provider !== sel ? `<button class="btn ghost" style="margin-top:8px" data-act="ia-use" data-p="${sel}">Usar ${esc(P[sel].name)} para ler comprovantes</button>` : ''}</div>
+      <div class="card"><div class="lbl">Privacidade: leia antes</div><p class="small" style="margin:6px 0">Ao usar a IA, <b>a imagem do comprovante sai do aparelho</b> e vai direto para ${P[sel].art} ${esc(P[sel].company)} (não passa pelo servidor do Cofre). Nesse caso, ela pode ver o que está no comprovante: nomes, valores, banco e parte do CPF. O resto do Cofre continua só com você.</p>
+        <p class="small" style="margin:6px 0">${IA_PRIVACY[sel]}</p>
+        <p class="small muted" style="margin:6px 0 0">Regras de cada empresa mudam: confira nos termos dela. Em caso de dúvida, use PDF, que é lido aqui no aparelho.</p>
+        <label class="check" style="margin-top:8px"><input type="checkbox" data-act="ia-warn" ${ia.noWarn ? '' : 'checked'}><div><b>Perguntar antes de cada envio</b><div class="small muted">Mostra um aviso toda vez que um comprovante for para a IA.</div></div></label></div>`;
+    return h;
+  }
+  async function iaSaveTest(p) {
+    const inp = document.getElementById('ia-key'), msg = document.getElementById('ia-msg');
+    const typed = (inp && inp.value || '').trim().replace(/\s+/g, '');
+    const key = typed || S.ia.keys[p];
+    const say = (t, bad) => { if (msg) { msg.innerHTML = t; msg.style.color = bad ? 'var(--danger)' : 'var(--pos)'; } };
+    if (!key) return say('Cole a chave primeiro.', true);
+    if (!navigator.onLine) return say('Sem internet agora. Conecte e tente de novo.', true);
+    say('<span style="color:var(--ink-2)">Testando a chave…</span>');
+    try {
+      const rq = Leitor.modelsRequest(p, key); const res = await fetch(rq.url, rq.init);
+      let j = {}; try { j = await res.json(); } catch (e) { j = {}; }
+      if (!res.ok) return say(esc(Leitor.explainError(p, res.status, j)), true);
+      const list = Leitor.pickModels(p, j);
+      S.ia.keys[p] = key; S.ia.lists[p] = list; if (!S.ia.models[p] || list.indexOf(S.ia.models[p]) < 0) S.ia.models[p] = list[0] || Leitor.DEFAULT_MODEL[p];
+      if (!S.ia.provider || !S.ia.keys[S.ia.provider]) S.ia.provider = p;
+      await iaSave(); S.iaPick = p; render();
+      toast(`Chave funcionando. ${S.ia.provider === p ? 'Já pode ler comprovantes.' : ''}`);
+    } catch (e) { say('Não consegui falar com ' + Leitor.PROVIDERS[p].art + ' ' + esc(Leitor.PROVIDERS[p].company) + '. Confira a internet. Detalhe: ' + esc(e.message), true); }
+  }
+
+  const toB64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192)); return btoa(s); };
+  // Foto grande -> JPEG de até 1600 px (mais rápido e gasta menos da cota). O original continua anexado.
+  async function shrinkImage(file) {
+    try {
+      const bmp = await createImageBitmap(file); const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      if (k === 1 && file.size < 1.5e6 && /jpe?g|png|webp/.test(file.type)) { bmp.close && bmp.close(); return { mime: file.type, base64: toB64(new Uint8Array(await file.arrayBuffer())) }; }
+      const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height); bmp.close && bmp.close();
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+      return { mime: 'image/jpeg', base64: toB64(new Uint8Array(await blob.arrayBuffer())) };
+    } catch (e) { return { mime: file.type || 'image/jpeg', base64: toB64(new Uint8Array(await file.arrayBuffer())) }; }
+  }
+  async function iaRead(fileData, text) {
+    const p = S.ia.provider, key = S.ia.keys[p], model = iaModel(p);
+    const rq = Leitor.readRequest(p, key, model, fileData, text);
+    const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+    let res; try { res = await fetch(rq.url, Object.assign({ signal: ctl.signal }, rq.init)); }
+    catch (e) { throw new Error(e.name === 'AbortError' ? 'A IA demorou demais para responder. Tente de novo.' : 'Não consegui falar com ' + Leitor.PROVIDERS[p].art + ' ' + Leitor.PROVIDERS[p].company + '. Confira a internet.'); }
+    finally { clearTimeout(timer); }
+    let j = {}; try { j = await res.json(); } catch (e) { j = {}; }
+    if (!res.ok) throw new Error(Leitor.explainError(p, res.status, j));
+    const out = Leitor.responseText(p, j);
+    if (out.blocked && !out.text) throw new Error('A IA se recusou a ler esta imagem. Preencha à mão.');
+    return Leitor.fromAi(out.text);
+  }
+  async function iaConfirmSend(isPdfText) {
+    if (S.ia.noWarn) return true;
+    const P = Leitor.PROVIDERS[S.ia.provider];
+    return confirmDialog({ title: 'Enviar para a IA?', ok: 'Enviar e ler', cancel: 'Não enviar',
+      text: `${isPdfText ? 'O texto deste comprovante' : 'A imagem deste comprovante'} vai sair do aparelho e ser lida pela <b>${esc(P.name)}</b>. Ela vai ver o que está nele (nomes, valores, banco).<br><br><span class="small muted">${IA_PRIVACY[S.ia.provider]}</span><br><br><span class="small muted">Para não ver este aviso, desligue em Mais → Leitor de comprovantes.</span>` });
+  }
+  function busySheet(text) { return openSheet({ title: 'Lendo comprovante', sticky: true, foot: false, body: `<div style="display:flex;align-items:center;gap:12px;padding:14px 4px 20px"><div class="spinner" aria-hidden="true" style="width:22px;height:22px;border-radius:50%;border:3px solid var(--accent-soft);border-top-color:var(--accent);animation:spin 0.9s linear infinite"></div><div>${text}</div></div>` }); }
+
+  async function openReceiptReader() {
+    await iaLoad();
+    const file = await new Promise(resolve => {
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*,application/pdf'; inp.style.display = 'none';
+      inp.onchange = () => { resolve(inp.files && inp.files[0]); inp.remove(); };
+      document.body.appendChild(inp); inp.click();
+    });
+    if (!file) return;
+    if (file.size > 15e6) return showError('Arquivo grande demais', 'O comprovante tem mais de 15 MB. Tire um print da tela do comprovante e tente de novo.');
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    const isImg = /^image\//.test(file.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '');
+    if (!isPdf && !isImg) return showError('Formato não aceito', 'Escolha uma foto, um print ou um PDF do comprovante.');
+    let local = null, text = '';
+    if (isPdf) {
+      const sh = busySheet('Lendo o PDF aqui no aparelho…');
+      try { const r = await Leitor.pdfText(new Uint8Array(await file.arrayBuffer())); text = r.text; if (r.encrypted) text = ''; local = Leitor.parseReceipt(text, { today: todayStr() }); }
+      catch (e) { local = null; } finally { sh.close(); }
+      if (local && local.complete) return receiptToWizard(local, file, 'aparelho');
+    }
+    // Não deu para ler tudo no aparelho: IA (se configurada) ou preencher à mão.
+    if (!iaReady()) {
+      const why = isPdf ? (text ? 'Li o PDF, mas não encontrei tudo (valor e data).' : 'Este PDF não tem texto (é uma imagem dentro do PDF).') : 'Foto e print precisam de uma IA para serem lidos.';
+      const go2 = await confirmDialog({ title: isPdf ? 'Não consegui ler tudo' : 'Configurar a leitura de fotos', ok: 'Configurar IA', cancel: 'Preencher à mão',
+        text: `${why}<br><br>Você pode configurar uma IA com a sua chave (o <b>Gemini tem plano grátis</b>) ou preencher à mão. Nos dois casos o comprovante fica anexado ao lançamento.` });
+      if (go2) { S.sheets.slice().forEach(x => x.close()); go('mais', 'leitor'); return; }
+      return receiptToWizard(local && (local.amount != null || local.date) ? local : null, file, local && (local.amount != null || local.date) ? 'aparelho' : null);
+    }
+    const pdfText = isPdf && text.length > 40 ? text : '';
+    if (!(await iaConfirmSend(!!pdfText))) return receiptToWizard(local && (local.amount != null || local.date) ? local : null, file, local && (local.amount != null || local.date) ? 'aparelho' : null);
+    const P = Leitor.PROVIDERS[S.ia.provider];
+    const sh = busySheet(`Enviando para ${esc(P.name)}…<div class="small muted">Leva alguns segundos.</div>`);
+    let r;
+    try {
+      // PDF com texto: manda só o texto (menos dados). Foto ou PDF sem texto: manda o arquivo.
+      const data = pdfText ? null : isPdf ? { mime: 'application/pdf', base64: toB64(new Uint8Array(await file.arrayBuffer())) } : await shrinkImage(file);
+      r = await iaRead(data, pdfText);
+    } catch (e) {
+      sh.close();
+      const again = await confirmDialog({ title: 'A IA não conseguiu ler', text: esc(e.message) + '<br><br>Você pode preencher à mão: o comprovante continua anexado.', ok: 'Preencher à mão', cancel: 'Cancelar' });
+      if (again) receiptToWizard(local && (local.amount != null || local.date) ? local : null, file, local ? 'aparelho' : null);
+      return;
+    }
+    sh.close();
+    if (r.notReceipt && r.amount == null) {
+      const ok = await confirmDialog({ title: 'Não parece um comprovante', text: 'A IA não encontrou um comprovante nesta imagem. Quer preencher à mão mesmo assim?', ok: 'Preencher à mão', cancel: 'Cancelar' });
+      if (!ok) return; return receiptToWizard(null, file, null);
+    }
+    receiptToWizard(r, file, P.name);
+  }
+  function receiptToWizard(r, file, source) {
+    const preset = { file, fromReceipt: source || 'manual' };
+    if (r) {
+      preset.type = r.type || 'despesa';
+      if (r.amount != null) preset.amount = r.amount;
+      if (r.date) preset.date = r.date;
+      if (r.description) preset.description = r.description.slice(0, 80);
+      preset.notes = ['Lido do comprovante' + (source && source !== 'aparelho' ? ' pela IA (' + source + ')' : ''), r.methodLabel, r.bank ? 'banco: ' + r.bank : ''].filter(Boolean).join(' · ');
+      if (preset.type === 'despesa' && preset.description) { const c = Classify.classify(preset.description); if (c) { preset.category = c.category; preset.category_auto = c.keyword; } }
+      preset.receipt = r;
+    }
+    openTxWizard(preset);
   }
 
   // ---------- guardar dinheiro ----------
@@ -4227,6 +4814,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     // ---- grupos ----
     h += group('Ferramentas', [
       row('docs', 'file', 'Gerar documento', 'extrato, relatório mensal, resumo para WhatsApp, dívidas…'),
+      row('leitor', 'scan', 'Leitor de comprovantes', S.ia && iaReady() ? 'lendo fotos com ' + esc(Leitor.PROVIDERS[S.ia.provider].name) : 'PDF no aparelho · fotos com IA (opcional)'),
       row('relatorios', 'bar', 'Relatórios', 'dia, semana, mês, ano ou período'),
       row('agenda', 'cal', 'Agenda', 'calendário e linha do tempo'),
       row('planejamento', 'target', 'Planejamento', 'metas, provisões, receitas previstas, a receber'),
@@ -5719,6 +6307,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     const backups = await DB.listBackups();
     for (const b of backups) await DB.deleteBackup(b.id);
     await DB.clearFiles();
+    try { await DB.set('ia_cfg', null); } catch (e) { /* ignora */ } S.ia = null;
     await DB.saveState(null, {});
     S.ds = null; S.meta = {}; S.locked = false; go('inicio');
     toast('Dados apagados deste aparelho');
@@ -5969,7 +6558,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
   // ---------- eventos ----------
   const TABS = { inicio: viewInicio, extrato: viewExtrato, pergunte: viewPergunte, contas: viewContas, mais: viewMais };
   const PAGES = { backup: pageBackup, planejamento: pagePlanejamento, conciliacao: pageConciliacao, auditoria: pageAuditoria, dados: pageDados, seguranca: pageSeguranca, sobre: pageSobre,
-    docs: pageDocs, relatorios: pageRelatorios, github: pageGithub, moedas: pageMoedas, sync: pageSync, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
+    docs: pageDocs, leitor: pageLeitor, relatorios: pageRelatorios, github: pageGithub, moedas: pageMoedas, sync: pageSync, agenda: () => backBar('Mais', 'mais') + viewAgenda() };
   const ACTIONS = {
     tab: el => go(el.dataset.tab),
     page: el => go(el.dataset.tab, el.dataset.page),
@@ -5980,6 +6569,18 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     'gh-save': () => ghSaveConfig(),
     'acc-new': () => openAccountWizard(),
     'save-money': () => openSaveWizard(),
+    'receipt-read': () => openReceiptReader(),
+    'ia-pick': el => { S.iaPick = el.dataset.p; render(); },
+    'ia-save': el => iaSaveTest(el.dataset.p),
+    'ia-use': async el => { S.ia.provider = el.dataset.p; await iaSave(); render(); toast('Pronto: os comprovantes serão lidos por ' + Leitor.PROVIDERS[el.dataset.p].name); },
+    'ia-del': async el => {
+      const p = el.dataset.p;
+      if (!(await confirmDialog({ title: 'Apagar a chave deste aparelho?', text: 'A chave sai do Cofre neste aparelho. Ela continua existindo na sua conta ' + (Leitor.PROVIDERS[p].art === 'o' ? 'do ' : 'da ') + esc(Leitor.PROVIDERS[p].company) + ': se quiser desativá-la de vez, apague também lá.', ok: 'Apagar chave', danger: true }))) return;
+      delete S.ia.keys[p]; delete S.ia.lists[p]; delete S.ia.models[p];
+      if (S.ia.provider === p) S.ia.provider = Object.keys(S.ia.keys).find(k => S.ia.keys[k]) || '';
+      await iaSave(); render(); toast('Chave apagada deste aparelho');
+    },
+    'ia-warn': async el => { S.ia.noWarn = !el.checked; await iaSave(); },
     'sy-go': () => syGo(),
     'sy-mode': el => { const e = document.getElementById('sy-email'); if (e) S.syEmail = e.value; S.syMode = el.dataset.mode || (S.syMode === 'signup' ? 'login' : 'signup'); S.syLinkMsg = null; render(); },
     'pw-toggle': el => { const i = document.getElementById(el.dataset.id); if (!i) return; const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'esconder' : 'mostrar'; },
@@ -6074,6 +6675,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     if (el && el.dataset.change === 'filter') { S.filters[el.dataset.k] = el.value; render(); }
     if (el && el.dataset.change === 'ext') { S.ext = S.ext || extDefaults(); S.ext[el.dataset.k] = el.value; render(); }
     if (el && el.dataset.change === 'rep') { S.rep[el.dataset.k] = el.value; render(); }
+    if (el && el.dataset.change === 'ia-model' && S.ia) { S.ia.models[el.dataset.p] = el.value; iaSave().then(() => toast('Modelo trocado')); }
   });
   let searchTimer;
   document.addEventListener('input', e => {
@@ -6166,6 +6768,7 @@ body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-e
     if (S.meta.pin && S.ds) S.locked = true;
     await syLoad();
     await fxLoadCache(); // cotação do último download: funciona sem internet
+    await iaLoad(); // chave da IA do leitor de comprovantes (só deste aparelho)
     await handleLinkHash();
     render();
     if (syReady()) syRun(false);
