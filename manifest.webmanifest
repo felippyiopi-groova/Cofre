@@ -1,12 +1,12 @@
 {
-  "name": "Cofre Financeiro Familiar",
-  "short_name": "Cofre",
+  "name": "IOPI Cofre · Gestão Financeira",
+  "short_name": "IOPI Cofre",
   "lang": "pt-BR",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0A2E3B",
-  "theme_color": "#0B6E69",
+  "background_color": "#061630",
+  "theme_color": "#0A62DC",
   "icons": [
     {
       "src": "icon-192.png",
